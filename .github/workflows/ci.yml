@@ -1,0 +1,45 @@
+# CI for the PUBLIC mirror (github.com/fileseal/mcp-send).
+# Synced into place as .github/workflows/ci.yml by scripts/sync-mcp-public.sh —
+# it is NOT a workflow of the FileSeal application repo, which is why it lives
+# under this name rather than in .github/workflows/ here.
+#
+# Deliberately minimal. The package's real integration tests (smoke.mjs,
+# mcp-check.mjs) need a live API key and a running FileSeal instance, so they
+# stay in the private repo; a public CI that needed a secret to pass would just
+# be a permanently red badge.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Syntax check
+        run: node --check index.mjs && node --check crypto.mjs
+      - name: Server starts and advertises its tools
+        run: |
+          node -e "
+          const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+          const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+          const t = new StdioClientTransport({ command: 'node', args: ['index.mjs'], env: { ...process.env, FILESEAL_API_KEY: 'ci-dummy-key' } });
+          const c = new Client({ name: 'ci', version: '0.0.0' });
+          await c.connect(t);
+          const info = c.getServerVersion();
+          const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
+          if (info.version !== pkg.version) throw new Error('reported version ' + info.version + ' != package.json ' + pkg.version);
+          const { tools } = await c.listTools();
+          const names = tools.map((x) => x.name).sort().join(',');
+          if (names !== 'revoke_send,secure_send,send_status') throw new Error('unexpected tools: ' + names);
+          await c.close();
+          console.log('ok: v' + info.version + ' advertising ' + names);
+          " --input-type=module

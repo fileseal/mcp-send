@@ -1,0 +1,45 @@
+{
+  "name": "@fileseal/send",
+  "version": "0.1.1",
+  "description": "MCP server that delivers a file to a person as a one-time, AES-256 encrypted, auto-deleting download link via the FileSeal Secure Send API.",
+  "license": "MIT",
+  "author": "FileSeal (https://fileseal.uk)",
+  "homepage": "https://fileseal.uk/developers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fileseal/mcp-send.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fileseal/mcp-send/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "fileseal",
+    "secure-send",
+    "file-sharing",
+    "encryption",
+    "one-time-link",
+    "gdpr"
+  ],
+  "type": "module",
+  "bin": {
+    "fileseal-send": "index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "crypto.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  }
+}
