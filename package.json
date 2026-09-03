@@ -1,6 +1,7 @@
 {
   "name": "@fileseal/send",
   "version": "0.1.1",
+  "mcpName": "io.github.fileseal/mcp-send",
   "description": "MCP server that delivers a file to a person as a one-time, AES-256 encrypted, auto-deleting download link via the FileSeal Secure Send API.",
   "license": "MIT",
   "author": "FileSeal (https://fileseal.uk)",
