@@ -1,9 +1,10 @@
 /**
  * End-to-end test of the MCP tool path against a LOCAL STUB of /v1/sends.
  *
- * Needs no API key and no running FileSeal instance, which is what makes it
- * different from smoke.mjs and mcp-check.mjs (both need a live key) and what
- * makes it safe to run in the public mirror's CI.
+ * Needs no API key and no running FileSeal instance. That is what separates it
+ * from the live integration tests kept in the private FileSeal repo (which
+ * need a real key and a running instance) and what makes it safe to run in
+ * this repository's CI.
  *
  * What it proves that the unit tests cannot: that driving the real MCP server
  * through a real MCP client produces the correct HTTP request. In particular
@@ -164,7 +165,9 @@ console.log('send_status and revoke_send');
   // encodeURIComponent and WHATWG URL normalises `/v1/sends/a b/../c` down to
   // `/v1/sends/c` before the request is sent, so the id traverses out of the
   // collection AND the old negative assertion still passed. Proven by mutation.
+  const beforeEnc = requests.length;
   await client.callTool({ name: 'send_status', arguments: { id: 'a b/../c' } });
+  ok(requests.length === beforeEnc + 1, 'the encoding check is looking at a NEW request');
   ok(
     requests.at(-1).url === '/v1/sends/a%20b%2F..%2Fc',
     `the id is percent-encoded into one path segment (got ${requests.at(-1).url})`
