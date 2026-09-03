@@ -27,14 +27,28 @@ const ok = (cond, msg) => {
 // --- stub /v1/sends -------------------------------------------------------
 const requests = [];
 const stub = createServer((req, res) => {
-  let body = '';
-  req.on('data', (c) => (body += c));
+  // Buffers, not string concatenation: `body += chunk` decodes each chunk
+  // independently, so a multi-byte UTF-8 character split across a chunk
+  // boundary is corrupted. The parse is guarded too — an uncaught throw in an
+  // 'end' handler kills the server mid-request, and the run hangs waiting for
+  // a response instead of reporting a failed assertion.
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
+    const raw = Buffer.concat(chunks).toString('utf8');
+    let parsed = null;
+    let parseError = null;
+    try {
+      parsed = raw ? JSON.parse(raw) : null;
+    } catch (err) {
+      parseError = err.message;
+    }
     requests.push({
       method: req.method,
       url: req.url,
       auth: req.headers.authorization,
-      body: body ? JSON.parse(body) : null,
+      body: parsed,
+      parseError,
     });
     res.setHeader('content-type', 'application/json');
     if (req.method === 'POST') {
@@ -146,8 +160,15 @@ console.log('send_status and revoke_send');
   ok(!s.isError && requests.at(-1).method === 'GET' && requests.at(-1).url === '/v1/sends/stub-send-id', 'GET /v1/sends/:id');
   const r = await client.callTool({ name: 'revoke_send', arguments: { id: 'stub-send-id' } });
   ok(!r.isError && requests.at(-1).method === 'DELETE', 'DELETE /v1/sends/:id');
-  const enc = await client.callTool({ name: 'send_status', arguments: { id: 'a b/../c' } });
-  ok(!/\/v1\/sends\/a b/.test(requests.at(-1).url), 'the id is URL-encoded, not interpolated raw');
+  // Assert the ENCODED path exactly. A negative match cannot work here: drop
+  // encodeURIComponent and WHATWG URL normalises `/v1/sends/a b/../c` down to
+  // `/v1/sends/c` before the request is sent, so the id traverses out of the
+  // collection AND the old negative assertion still passed. Proven by mutation.
+  await client.callTool({ name: 'send_status', arguments: { id: 'a b/../c' } });
+  ok(
+    requests.at(-1).url === '/v1/sends/a%20b%2F..%2Fc',
+    `the id is percent-encoded into one path segment (got ${requests.at(-1).url})`
+  );
 
   const twice = await client.callTool({ name: 'revoke_send', arguments: { id: 'stub-send-id' } });
   ok(!twice.isError && /revoked/.test(text(twice)), 'revoking an already-revoked send succeeds (idempotent)');

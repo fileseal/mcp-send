@@ -41,6 +41,19 @@ if (!API_KEY) {
   process.exit(1);
 }
 
+// `engines.node` is ADVISORY: npm only warns unless engine-strict is set, and
+// `npx -y` does not enforce it at all. Without this check, an unsupported
+// runtime produced the worst possible shape — the server started, advertised
+// all three tools, and threw only on the first secure_send, because
+// globalThis.crypto sat behind a flag until Node 19. Fail at startup instead.
+if (!globalThis.crypto?.subtle) {
+  process.stderr.write(
+    `fileseal-send: this runtime has no Web Crypto (globalThis.crypto.subtle). ` +
+      `Node 20 or newer is required; this is ${process.version}. Exiting.\n`
+  );
+  process.exit(1);
+}
+
 // Minimal extension -> MIME inference for the API allowlist.
 const MIME_BY_EXT = {
   '.pdf': 'application/pdf',
@@ -94,9 +107,13 @@ async function readJson(response) {
 // Version is read from package.json rather than duplicated here: a hardcoded
 // copy silently drifts from the published version, and the version an MCP
 // client reports back is the only clue to which build a user is running.
-const { version: PACKAGE_VERSION } = JSON.parse(
-  await readFile(new URL('./package.json', import.meta.url), 'utf8')
-);
+// Guarded: the version is cosmetic, so a missing or unreadable package.json
+// must not stop the server booting. npm always packs package.json, so the
+// published path is safe — but the README invites pointing an MCP client at a
+// vendored copy of index.mjs + crypto.mjs, and that copy may not have it.
+const PACKAGE_VERSION = await readFile(new URL('./package.json', import.meta.url), 'utf8')
+  .then((raw) => JSON.parse(raw).version ?? 'unknown')
+  .catch(() => 'unknown');
 
 const server = new McpServer({
   name: 'fileseal-send',

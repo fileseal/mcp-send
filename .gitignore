@@ -1,1 +1,6 @@
 node_modules/
+
+# Never let a stray env file be staged into the PUBLIC mirror: the sync
+# prints `git add -A`, and this file is the mirror's .gitignore too.
+.env
+.env.*

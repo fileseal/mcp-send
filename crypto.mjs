@@ -13,7 +13,7 @@
  *     `keyToFragment` / `fragmentToKey`
  *
  * Standalone by design: this package does NOT import from the Next app (no `@/`
- * alias). It relies only on globals available in Node 22 (crypto.subtle, btoa,
+ * alias). It relies only on globals available in Node 20+ (crypto.subtle, btoa,
  * atob), exactly as the isomorphic source module does.
  */
 
