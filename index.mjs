@@ -368,8 +368,9 @@ server.registerTool(
   {
     title: 'Revoke a FileSeal send',
     description:
-      'Revoke a send by id, deleting its encrypted blobs. Fails (409) if the send was ' +
-      'already collected, already revoked, or does not exist.',
+      'Revoke a send by id, deleting its encrypted blobs. Idempotent: revoking an ' +
+      'already-revoked send succeeds. Fails if the send has already been collected ' +
+      '(409) or does not exist (404).',
     inputSchema: {
       id: z.string().describe('The send id to revoke.'),
     },
@@ -389,9 +390,16 @@ server.registerTool(
     }
 
     const data = await readJson(response);
+    // Verified against production 2026-09-03: already-revoked returns 200
+    // (idempotent), already-collected returns 409, an unknown id returns 404.
+    // This branch used to claim all three were 409, and there was no 404 case
+    // even though send_status has one.
+    if (response.status === 404) {
+      return textResult(`Send not found: ${id}`, true);
+    }
     if (response.status === 409) {
       return textResult(
-        `Could not revoke ${id}: ${data.error ?? 'already collected, already revoked, or not found.'}`,
+        `Could not revoke ${id}: ${data.error ?? 'it has already been collected.'}`,
         true
       );
     }

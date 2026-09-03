@@ -43,7 +43,17 @@ const stub = createServer((req, res) => {
         expiresAt: '2026-09-05T00:00:00.000Z', filesCount: 1, totalSize: 42, emailSent: true,
       }));
     } else if (req.method === 'DELETE') {
-      res.end(JSON.stringify({ success: true, id: 'stub-send-id', status: 'cancelled' }));
+      // Mirrors production, verified by hand against fileseal.uk: already
+      // revoked -> 200 (idempotent), already collected -> 409, unknown -> 404.
+      if (req.url.includes('collected-id')) {
+        res.statusCode = 409;
+        res.end(JSON.stringify({ error: 'Send cannot be revoked (already collected).' }));
+      } else if (req.url.includes('missing-id')) {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: 'Send not found.' }));
+      } else {
+        res.end(JSON.stringify({ success: true, id: 'stub-send-id', status: 'revoked' }));
+      }
     } else {
       res.end(JSON.stringify({
         id: 'stub-send-id', status: 'pending', deliveryMode: 'link', createdAt: 'x',
@@ -138,6 +148,14 @@ console.log('send_status and revoke_send');
   ok(!r.isError && requests.at(-1).method === 'DELETE', 'DELETE /v1/sends/:id');
   const enc = await client.callTool({ name: 'send_status', arguments: { id: 'a b/../c' } });
   ok(!/\/v1\/sends\/a b/.test(requests.at(-1).url), 'the id is URL-encoded, not interpolated raw');
+
+  const twice = await client.callTool({ name: 'revoke_send', arguments: { id: 'stub-send-id' } });
+  ok(!twice.isError && /revoked/.test(text(twice)), 'revoking an already-revoked send succeeds (idempotent)');
+  const collected = await client.callTool({ name: 'revoke_send', arguments: { id: 'collected-id' } });
+  ok(collected.isError === true && /already collected/.test(text(collected)), '409 on a collected send is reported as collected');
+  const missing = await client.callTool({ name: 'revoke_send', arguments: { id: 'missing-id' } });
+  ok(missing.isError === true && /not found/.test(text(missing)), '404 on an unknown id is reported as not found');
+  ok(!/HTTP 404/.test(text(missing)), 'and not as a raw HTTP error');
 }
 
 await client.close();
