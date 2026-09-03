@@ -1,10 +1,11 @@
 /**
  * Crypto helpers for the fileseal-send MCP server.
  *
- * SOURCE OF TRUTH: ../../src/lib/attachments.ts in the FileSeal Next app.
- * This file MUST byte-for-byte mirror that module's encryption format so that
- * ciphertext produced here decrypts cleanly via its `decryptAttachment` on the
- * `/receive/[id]` page. Specifically:
+ * This file MUST byte-for-byte mirror FileSeal's server-side attachment format
+ * so that ciphertext produced here decrypts cleanly on the `/receive/[id]`
+ * page. That format is pinned by a round-trip test in the private FileSeal
+ * application repo, so treat ANY change here as breaking and bump the version.
+ * Specifically:
  *   - keys are raw AES-256-GCM keys, base64-encoded (btoa) — `generateAttachmentKey`
  *   - the on-the-wire blob format is EXACTLY [12-byte IV][AES-GCM ciphertext]
  *     (decryptAttachment does `slice(0,12)` for the IV, `slice(12)` for the body)

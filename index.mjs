@@ -3,8 +3,8 @@
  * fileseal-send — a standalone MCP stdio server that wraps the FileSeal
  * authenticated Secure Send API (`POST/GET/DELETE /v1/sends`).
  *
- * Standalone package: does NOT import from the Next app. Crypto is mirrored
- * locally in ./crypto.mjs (source of truth: ../../src/lib/attachments.ts).
+ * Standalone package: does NOT import from the FileSeal app. Crypto is mirrored
+ * locally in ./crypto.mjs, matching FileSeal's server-side attachment format.
  *
  * Env:
  *   FILESEAL_API_KEY       (required) — Bearer token for the /v1 API.
