@@ -420,8 +420,21 @@ server.registerTool(
     // COLLECTED - i.e. that someone downloaded a document. Do not narrow it
     // again: the mistake came from spot-checking with the all-zeros UUID, which
     // fails isValidUUID and so 404s for the wrong reason.
+    // A 404 from THIS route means a malformed id — but a 404 can also come from
+    // a misconfigured origin (the default base URL is localhost, and a base URL
+    // with a path prefix, or a dev server without the /v1/sends rewrite, 404s
+    // the whole route). Only claim the id is invalid when the response actually
+    // looks like this API answering; otherwise say so, because "your id is
+    // malformed" sends a model looking in the wrong place entirely.
     if (response.status === 404) {
-      return textResult(`Not a valid send id: ${id}`, true);
+      if (typeof data.error === 'string' && data.error.length > 0) {
+        return textResult(`Not a valid send id: ${id}`, true);
+      }
+      return textResult(
+        `FileSeal API returned 404 with no error body for ${SENDS_URL}/${encodeURIComponent(id)} — ` +
+          `check FILESEAL_API_BASE_URL (currently ${BASE_URL}).`,
+        true
+      );
     }
     if (response.status === 409) {
       return textResult(

@@ -15,6 +15,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# This is a PUBLIC repository and `pull_request` runs fork-authored code, so the
+# token is pinned to the minimum rather than inheriting whatever the org's
+# default turns out to be.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest

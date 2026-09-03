@@ -74,6 +74,11 @@ const stub = createServer((req, res) => {
       } else if (req.url.includes('not-a-uuid')) {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: 'Send not found.' }));
+      } else if (req.url.includes('bare-404')) {
+        // A 404 with NO error body: what a misconfigured origin returns, rather
+        // than this API answering. Must not be reported as a malformed id.
+        res.statusCode = 404;
+        res.end('');
       } else {
         res.end(JSON.stringify({ success: true, id: 'stub-send-id', status: 'revoked' }));
       }
@@ -191,8 +196,12 @@ console.log('send_status and revoke_send');
   ok(gone.isError === true, 'a well-formed unknown UUID is an error');
   ok(/not found/.test(text(gone)), 'and its message admits the send may simply not exist');
   const malformed = await client.callTool({ name: 'revoke_send', arguments: { id: 'not-a-uuid' } });
-  ok(malformed.isError === true && /not a valid send id/i.test(text(malformed)), '404 is reported as a malformed id');
+  ok(malformed.isError === true && /not a valid send id/i.test(text(malformed)), '404 WITH an api error body is reported as a malformed id');
   ok(!/HTTP 404/.test(text(malformed)), 'and not as a raw HTTP error');
+  const bare = await client.callTool({ name: 'revoke_send', arguments: { id: 'bare-404' } });
+  ok(bare.isError === true, 'a bodyless 404 is still an error');
+  ok(!/not a valid send id/i.test(text(bare)), 'but is NOT blamed on the id — that would misdirect the model');
+  ok(/FILESEAL_API_BASE_URL/.test(text(bare)), 'it points at the base URL instead');
 }
 
 await client.close();
