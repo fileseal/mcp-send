@@ -18,11 +18,22 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the declared engines floor, and it is in the matrix so the floor
+        # is PROVEN rather than asserted. It matters here: globalThis.crypto sat
+        # behind --experimental-global-webcrypto until Node 19, and crypto.mjs
+        # uses it, so on an unsupported runtime the server would start, advertise
+        # its tools, and only throw on the first secure_send — the worst shape
+        # for a published package. package.json said ">=18" until a review
+        # pointed this out.
+        node-version: ['20', '22']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node-version }}
       - run: npm ci
       - name: Syntax check
         run: node --check index.mjs && node --check crypto.mjs
@@ -48,3 +59,11 @@ jobs:
           await c.close();
           console.log('ok: v' + info.version + ' advertising ' + names);
           "
+
+      # The tool path itself, against a local stub of /v1/sends. Needs no API
+      # key and no running FileSeal instance, which is why it can live here:
+      # it asserts the zero-knowledge invariant (link mode must not send the
+      # encryption key, email mode must), which is a property of the request
+      # body that no unit test can pin.
+      - name: Tool path end to end against a stub API
+        run: node stub-e2e.mjs
