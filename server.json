@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.fileseal/mcp-send",
+  "description": "Send a file to a person as a one-time, encrypted, auto-deleting download link.",
+  "title": "FileSeal Secure Send",
+  "websiteUrl": "https://fileseal.uk/developers",
+  "repository": {
+    "url": "https://github.com/fileseal/mcp-send",
+    "source": "github"
+  },
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@fileseal/send",
+      "version": "0.1.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "FILESEAL_API_KEY",
+          "description": "FileSeal API key, created in Settings. Sent as a bearer token on every call.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "FILESEAL_API_BASE_URL",
+          "description": "FileSeal API origin. Set this to https://fileseal.uk; it defaults to http://localhost:3000.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
