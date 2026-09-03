@@ -58,12 +58,20 @@ const stub = createServer((req, res) => {
         expiresAt: '2026-09-05T00:00:00.000Z', filesCount: 1, totalSize: 42, emailSent: true,
       }));
     } else if (req.method === 'DELETE') {
-      // Mirrors production, verified by hand against fileseal.uk: already
-      // revoked -> 200 (idempotent), already collected -> 409, unknown -> 404.
+      // Mirrors production, measured against fileseal.uk. DELETE is not
+      // symmetric with GET: 404 is ONLY a malformed id; a well-formed UUID that
+      // does not exist returns 409, indistinguishable from 'collected'. The
+      // first version of this stub asserted unknown -> 404, which ratified a
+      // false claim in the tool description because the only case it exercised
+      // was a non-UUID.
       if (req.url.includes('collected-id')) {
         res.statusCode = 409;
-        res.end(JSON.stringify({ error: 'Send cannot be revoked (already collected).' }));
-      } else if (req.url.includes('missing-id')) {
+        res.end(JSON.stringify({ error: 'Send cannot be revoked (already collected, already revoked, or not found).' }));
+      } else if (req.url.includes('069b31db-461d-47e4-82c1-771f08fb0b95')) {
+        // A well-formed UUID that does not exist: the realistic case.
+        res.statusCode = 409;
+        res.end(JSON.stringify({ error: 'Send cannot be revoked (already collected, already revoked, or not found).' }));
+      } else if (req.url.includes('not-a-uuid')) {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: 'Send not found.' }));
       } else {
@@ -176,10 +184,15 @@ console.log('send_status and revoke_send');
   const twice = await client.callTool({ name: 'revoke_send', arguments: { id: 'stub-send-id' } });
   ok(!twice.isError && /revoked/.test(text(twice)), 'revoking an already-revoked send succeeds (idempotent)');
   const collected = await client.callTool({ name: 'revoke_send', arguments: { id: 'collected-id' } });
-  ok(collected.isError === true && /already collected/.test(text(collected)), '409 on a collected send is reported as collected');
-  const missing = await client.callTool({ name: 'revoke_send', arguments: { id: 'missing-id' } });
-  ok(missing.isError === true && /not found/.test(text(missing)), '404 on an unknown id is reported as not found');
-  ok(!/HTTP 404/.test(text(missing)), 'and not as a raw HTTP error');
+  ok(collected.isError === true, '409 is reported as an error');
+  // The realistic miss: a well-formed UUID that does not exist also 409s, so the
+  // tool must NOT tell the model the document was collected.
+  const gone = await client.callTool({ name: 'revoke_send', arguments: { id: '069b31db-461d-47e4-82c1-771f08fb0b95' } });
+  ok(gone.isError === true, 'a well-formed unknown UUID is an error');
+  ok(/not found/.test(text(gone)), 'and its message admits the send may simply not exist');
+  const malformed = await client.callTool({ name: 'revoke_send', arguments: { id: 'not-a-uuid' } });
+  ok(malformed.isError === true && /not a valid send id/i.test(text(malformed)), '404 is reported as a malformed id');
+  ok(!/HTTP 404/.test(text(malformed)), 'and not as a raw HTTP error');
 }
 
 await client.close();

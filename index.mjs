@@ -385,9 +385,10 @@ server.registerTool(
   {
     title: 'Revoke a FileSeal send',
     description:
-      'Revoke a send by id, deleting its encrypted blobs. Idempotent: revoking an ' +
-      'already-revoked send succeeds. Fails if the send has already been collected ' +
-      '(409) or does not exist (404).',
+      'Revoke a send by id, deleting its encrypted blobs. Idempotent: revoking a send ' +
+      'this key already revoked succeeds. Returns an error (409) if the send has been ' +
+      'collected, does not exist, or was created by a different API key — the API does ' +
+      'not distinguish these. A malformed id returns 404.',
     inputSchema: {
       id: z.string().describe('The send id to revoke.'),
     },
@@ -407,16 +408,27 @@ server.registerTool(
     }
 
     const data = await readJson(response);
-    // Verified against production 2026-09-03: already-revoked returns 200
-    // (idempotent), already-collected returns 409, an unknown id returns 404.
-    // This branch used to claim all three were 409, and there was no 404 case
-    // even though send_status has one.
+    // Measured against production 2026-09-03. DELETE is NOT symmetric with GET:
+    //   200 - revoked, including re-revoking one this key already revoked
+    //         (the route's UPDATE excludes only 'collected', so 'cancelled' matches)
+    //   409 - collected, OR a well-formed id that does not exist, OR another
+    //         key's send. The route cannot tell these apart, so neither can we.
+    //   404 - ONLY a malformed id (isValidUUID uses a strict v1-5 regex).
+    // An earlier version of this comment claimed an unknown id returns 404 and
+    // narrowed the 409 text to "already collected". That was wrong, and it made
+    // the tool tell the model that a send which never existed had been
+    // COLLECTED - i.e. that someone downloaded a document. Do not narrow it
+    // again: the mistake came from spot-checking with the all-zeros UUID, which
+    // fails isValidUUID and so 404s for the wrong reason.
     if (response.status === 404) {
-      return textResult(`Send not found: ${id}`, true);
+      return textResult(`Not a valid send id: ${id}`, true);
     }
     if (response.status === 409) {
       return textResult(
-        `Could not revoke ${id}: ${data.error ?? 'it has already been collected.'}`,
+        `Could not revoke ${id}: ${
+          data.error ??
+          'it has already been collected, does not exist, or was not created by this API key.'
+        }`,
         true
       );
     }
