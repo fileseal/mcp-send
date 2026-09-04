@@ -54,6 +54,12 @@ if (!globalThis.crypto?.subtle) {
   process.exit(1);
 }
 
+// Mirrors MAX_FILE_BYTES in src/app/api/v1/sends/route.ts. INLINE_SAFE_BYTES is
+// the practical ceiling for THIS transport: bytes travel inline as base64
+// (~1.37x with the IV and tag), against a ~4.5MB request body limit.
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const INLINE_SAFE_BYTES = 3 * 1024 * 1024;
+
 // Minimal extension -> MIME inference for the API allowlist.
 const MIME_BY_EXT = {
   '.pdf': 'application/pdf',
@@ -133,7 +139,10 @@ server.registerTool(
       'after a single download. Encrypts the file client-side (AES-GCM-256) and creates a ' +
       'FileSeal secure send. In "link" mode (default, zero-knowledge) the key never leaves ' +
       'this machine and is returned only inside the share link fragment. In "email" mode ' +
-      'FileSeal emails the recipient a working link and stores the key server-side.',
+      'FileSeal emails the recipient a working link and stores the key server-side. ' +
+      'Limits: 10MB per file and 50MB per send; accepted types are PDF, DOC, DOCX, TXT, ' +
+      'JPG and PNG. Files are sent inline, so anything over about 3MB of plaintext may ' +
+      'exceed the request body limit even though it is under the 10MB cap.',
     inputSchema: {
       filePath: z
         .string()
@@ -152,7 +161,10 @@ server.registerTool(
         .string()
         .email()
         .optional()
-        .describe('Recipient email — REQUIRED when deliveryMode is "email".'),
+        .describe(
+          'Recipient email — REQUIRED when deliveryMode is "email". IGNORED in "link" mode: ' +
+            'no email is sent and the address is not stored, so you must share the link yourself.'
+        ),
       deliveryMode: z
         .enum(['link', 'email'])
         .default('link')
@@ -213,6 +225,26 @@ server.registerTool(
 
     if (!bytes || bytes.length === 0) {
       return textResult('Error: the file is empty or could not be read.', true);
+    }
+    // Pre-flight the size the API will enforce, so an oversized file fails here
+    // instead of after encrypting and shipping a base64-inflated body — an 11MB
+    // file previously produced a ~14.7MB POST before the server rejected it,
+    // and the model was shown the platform's raw non-JSON 413 page.
+    if (bytes.length > MAX_FILE_BYTES) {
+      return textResult(
+        `Error: ${resolvedFilename ?? 'the file'} is ${(bytes.length / 1024 / 1024).toFixed(1)}MB, ` +
+          `over FileSeal's ${MAX_FILE_BYTES / 1024 / 1024}MB per-file limit.`,
+        true
+      );
+    }
+    if (bytes.length > INLINE_SAFE_BYTES) {
+      return textResult(
+        `Error: ${resolvedFilename ?? 'the file'} is ${(bytes.length / 1024 / 1024).toFixed(1)}MB. ` +
+          `This tool sends file bytes inline as base64, which inflates them by about a third, so ` +
+          `anything over ~${(INLINE_SAFE_BYTES / 1024 / 1024).toFixed(0)}MB exceeds the API's request body limit. ` +
+          `Send a smaller file.`,
+        true
+      );
     }
     if (!resolvedMimeType) {
       return textResult(
@@ -296,6 +328,13 @@ server.registerTool(
           '',
           'The decryption key lives ONLY in the #k= fragment of the link above — ',
           'FileSeal never received it. Share the full link with your recipient.',
+          ...(recipientEmail
+            ? [
+                '',
+                `NOTE: no email was sent. recipientEmail (${recipientEmail}) is ignored in link mode; ` +
+                  `use deliveryMode "email" if you want FileSeal to deliver it.`,
+              ]
+            : []),
         ].join('\n')
       );
     }
@@ -310,7 +349,9 @@ server.registerTool(
         `Files: ${data.filesCount}, total size: ${data.totalSize} bytes`,
         data.emailSent
           ? ''
-          : '\nWarning: FileSeal could not send the email — check the recipient and try revoking/resending.',
+          : `\nFileSeal could not email the recipient. There is no resend tool — but in email ` +
+            `mode the key is stored server-side, so this link works as-is and you can pass it ` +
+            `to them yourself:\n${data.claimUrl}`,
       ].join('\n')
     );
   }
@@ -437,11 +478,15 @@ server.registerTool(
       );
     }
     if (response.status === 409) {
+      // Do NOT lead with data.error. The route always sends JSON on 409, so
+      // `data.error ?? <local>` made the corrected wording dead code — and the
+      // server's own string says "already revoked", which is FALSE (a re-revoke
+      // returns 200) and omits the other-API-key case. The model would read
+      // "already revoked" and conclude revocation was in effect when the send
+      // may have been collected, i.e. downloaded by the recipient.
+      const detail = typeof data.error === 'string' && data.error.length > 0 ? ` (API said: ${data.error})` : '';
       return textResult(
-        `Could not revoke ${id}: ${
-          data.error ??
-          'it has already been collected, does not exist, or was not created by this API key.'
-        }`,
+        `Could not revoke ${id}: it has already been collected, does not exist, or was not created by this API key.${detail}`,
         true
       );
     }
