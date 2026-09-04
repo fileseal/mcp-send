@@ -483,8 +483,11 @@ server.registerTool(
         return textResult(`Not a valid send id: ${id}`, true);
       }
       return textResult(
-        `FileSeal API returned 404 with no error body for ${SENDS_URL}/${encodeURIComponent(id)} — ` +
-          `check FILESEAL_API_BASE_URL (currently ${BASE_URL}).`,
+        // "no error body" was wrong once the HTML case was handled: there IS a
+        // body, it just is not this API's JSON.
+        `FileSeal API returned 404 without a JSON response body for ${SENDS_URL}/${encodeURIComponent(id)}, ` +
+          `so this is a wrong-endpoint problem rather than a bad id — check FILESEAL_API_BASE_URL ` +
+          `(currently ${BASE_URL}).`,
         true
       );
     }

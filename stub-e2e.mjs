@@ -359,6 +359,7 @@ console.log('send_status and revoke_send');
   ok(html.isError === true, 'an HTML 404 from a wrong base URL is an error');
   ok(!/not a valid send id/i.test(text(html)), 'and is NOT blamed on the id — this is the COMMON misconfiguration shape');
   ok(/FILESEAL_API_BASE_URL/.test(text(html)), 'it points at the base URL');
+  ok(!/no error body/i.test(text(html)), 'and does not claim there was no body — an HTML page IS a body');
 
   const bare = await client.callTool({ name: 'revoke_send', arguments: { id: 'bare-404' } });
   ok(bare.isError === true, 'a bodyless 404 is still an error');
