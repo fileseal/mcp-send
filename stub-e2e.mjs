@@ -14,7 +14,7 @@
  * Run:  node stub-e2e.mjs
  */
 import { createServer } from 'node:http';
-import { writeFileSync, mkdtempSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -108,6 +108,12 @@ const stub = createServer((req, res) => {
         res.end(JSON.stringify({ success: true, id: 'stub-send-id', status: 'revoked' }));
       }
     } else {
+      if (req.url.includes('html-404')) {
+        res.statusCode = 404;
+        res.setHeader('content-type', 'text/html');
+        res.end('<!DOCTYPE html><html><head><title>404: This page could not be found.</title></head><body>404</body></html>');
+        return;
+      }
       if (req.url.includes('not-a-uuid')) {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: 'Send not found.' }));
@@ -209,13 +215,14 @@ console.log('size pre-flight');
   const before = requests.length;
   const res = await client.callTool({ name: 'secure_send', arguments: { filePath: big, deliveryMode: 'link' } });
   ok(res.isError === true, 'an oversized file is refused');
-  ok(/10MB per-file limit/.test(text(res)), 'naming the API cap');
+  ok(/3MB limit/.test(text(res)), "naming THIS tool's cap, not FileSeal's larger one");
+  ok(!/10MB per-file limit/.test(text(res)), 'and not a cap the caller cannot actually use');
   ok(requests.length === before, 'WITHOUT encrypting and shipping a ~15MB body first');
 
   const mid = join(dir, 'mid.pdf');
   writeFileSync(mid, Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(4 * 1024 * 1024, 0x42)]));
   const res2 = await client.callTool({ name: 'secure_send', arguments: { filePath: mid, deliveryMode: 'link' } });
-  ok(res2.isError === true && /inline/.test(text(res2)), 'a file under 10MB but over the inline body limit is refused too');
+  ok(res2.isError === true && /inline/.test(text(res2)), 'a 4MB file is refused for the same reason, with the same number');
   ok(requests.length === before, 'and also sends nothing');
 }
 
@@ -329,13 +336,17 @@ console.log('send_status and revoke_send');
   ok(/Delivery mode: link/.test(st), 'and the delivery mode');
   ok(/api_send_created/.test(st), 'and the audit events');
   const statusMissing = await client.callTool({ name: 'send_status', arguments: { id: 'not-a-uuid' } });
-  ok(statusMissing.isError === true && /Send not found/.test(text(statusMissing)), 'send_status maps 404 to not-found');
+  ok(statusMissing.isError === true && /Send not found/.test(text(statusMissing)), 'send_status maps an API 404 to not-found');
+  const statusHtml = await client.callTool({ name: 'send_status', arguments: { id: 'html-404' } });
+  ok(statusHtml.isError === true, 'send_status errors on an HTML 404');
+  ok(!/Send not found/.test(text(statusHtml)), 'and does NOT claim the send is missing when the endpoint is wrong');
+  ok(/FILESEAL_API_BASE_URL/.test(text(statusHtml)), 'it points at the base URL, as revoke_send does');
+  ok(!/<!DOCTYPE|<html/i.test(text(statusHtml)), 'and never pastes raw HTML into the model context');
 
   const twice = await client.callTool({ name: 'revoke_send', arguments: { id: 'stub-send-id' } });
-  // NOT a test of idempotency: that is a server property (the revoke UPDATE
-  // excludes only 'collected'), pinned at source level in
-  // src/app/api/v1/sends/__tests__/sends-id.test.ts. All this shows is that the
-  // client reports a 200 as success rather than inventing an error.
+  // NOT a test of idempotency: that is a server property, pinned by a test in
+  // FileSeal's own (private) repo. All this shows is that the client reports a
+  // 200 as success rather than inventing an error.
   ok(!twice.isError && /revoked/.test(text(twice)), 'a 200 from DELETE is reported as success, not an error');
   const collected = await client.callTool({ name: 'revoke_send', arguments: { id: 'collected-id' } });
   ok(collected.isError === true, '409 is reported as an error');
@@ -359,6 +370,7 @@ console.log('send_status and revoke_send');
   ok(html.isError === true, 'an HTML 404 from a wrong base URL is an error');
   ok(!/not a valid send id/i.test(text(html)), 'and is NOT blamed on the id — this is the COMMON misconfiguration shape');
   ok(/FILESEAL_API_BASE_URL/.test(text(html)), 'it points at the base URL');
+  ok(!/<!DOCTYPE|<html/i.test(text(html)), 'and never pastes the raw HTML page into the model context');
   ok(!/no error body/i.test(text(html)), 'and does not claim there was no body — an HTML page IS a body');
 
   const bare = await client.callTool({ name: 'revoke_send', arguments: { id: 'bare-404' } });
@@ -369,5 +381,8 @@ console.log('send_status and revoke_send');
 
 await client.close();
 stub.close();
+// The size cases write an 11MB and a 4MB file; the pre-push hook runs this on
+// every push, so leaving the temp dir behind leaked ~15MB each time.
+rmSync(dir, { recursive: true, force: true });
 console.log(failures === 0 ? '\nSTUB E2E PASSED' : `\nSTUB E2E FAILED (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

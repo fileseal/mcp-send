@@ -4,7 +4,8 @@
  * authenticated Secure Send API (`POST/GET/DELETE /v1/sends`).
  *
  * Standalone package: does NOT import from the FileSeal app. Crypto is mirrored
- * locally in ./crypto.mjs, matching FileSeal's server-side attachment format.
+ * locally in ./crypto.mjs, matching FileSeal's server-side attachment format,
+ * which is pinned by a round-trip test in FileSeal's own (private) repo.
  *
  * Env:
  *   FILESEAL_API_KEY       (required) — Bearer token for the /v1 API.
@@ -54,10 +55,10 @@ if (!globalThis.crypto?.subtle) {
   process.exit(1);
 }
 
-// Mirrors MAX_FILE_BYTES in src/app/api/v1/sends/route.ts. INLINE_SAFE_BYTES is
-// the practical ceiling for THIS transport: bytes travel inline as base64
-// (~1.37x with the IV and tag), against a ~4.5MB request body limit.
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+// The practical ceiling for THIS transport: file bytes travel inline as base64
+// (~1.37x, plus a 12-byte IV and 16-byte tag) against the API's request body
+// limit. FileSeal itself accepts larger files by other routes; this tool cannot
+// reach them, so this is the only limit worth telling a caller about.
 const INLINE_SAFE_BYTES = 3 * 1024 * 1024;
 
 // Minimal extension -> MIME inference for the API allowlist.
@@ -74,6 +75,17 @@ const MIME_BY_EXT = {
 
 function inferMimeType(filename) {
   return MIME_BY_EXT[extname(filename).toLowerCase()] ?? undefined;
+}
+
+/**
+ * The server's own message, or '' when the body was not this API's JSON.
+ *
+ * Never interpolate `data.error` directly: readJson coerces ANY non-JSON body
+ * into `{ error: <first 500 chars> }`, so a proxy or wrong-origin HTML page
+ * would be pasted verbatim into the model's context.
+ */
+function apiDetail(data) {
+  return data.fromApi && typeof data.error === 'string' && data.error.length > 0 ? data.error : '';
 }
 
 function textResult(text, isError = false) {
@@ -238,13 +250,10 @@ server.registerTool(
     // instead of after encrypting and shipping a base64-inflated body — an 11MB
     // file previously produced a ~14.7MB POST before the server rejected it,
     // and the model was shown the platform's raw non-JSON 413 page.
-    if (bytes.length > MAX_FILE_BYTES) {
-      return textResult(
-        `Error: ${resolvedFilename ?? 'the file'} is ${(bytes.length / 1024 / 1024).toFixed(1)}MB, ` +
-          `over FileSeal's ${MAX_FILE_BYTES / 1024 / 1024}MB per-file limit.`,
-        true
-      );
-    }
+    // ONE limit, deliberately. There used to be a >10MB branch naming FileSeal's
+    // own per-file cap, which was unreachable except for very large files and
+    // misdirected the model when it did fire: told "10MB", it would shrink an
+    // 11MB file to 5MB, retry, and hit this 3MB gate instead.
     if (bytes.length > INLINE_SAFE_BYTES) {
       return textResult(
         `Error: ${resolvedFilename ?? 'the file'} is ${(bytes.length / 1024 / 1024).toFixed(1)}MB, over this ` +
@@ -320,7 +329,7 @@ server.registerTool(
     const data = await readJson(response);
     if (!response.ok || !data.success) {
       return textResult(
-        `FileSeal API error (HTTP ${response.status}): ${data.error ?? 'Unknown error'}`,
+        `FileSeal API error (HTTP ${response.status}): ${apiDetail(data) || 'no JSON error body (check FILESEAL_API_BASE_URL)'}`,
         true
       );
     }
@@ -396,11 +405,22 @@ server.registerTool(
 
     const data = await readJson(response);
     if (response.status === 404) {
+      // Same discrimination as revoke_send: a 404 that is not this API's JSON
+      // means the endpoint is wrong, not that the send is gone. A base URL like
+      // https://fileseal.uk/v1 (-> /v1/v1/sends/<id>) hits exactly this.
+      if (!data.fromApi) {
+        return textResult(
+          `FileSeal API returned 404 without a JSON response body for ${SENDS_URL}/${encodeURIComponent(id)}, ` +
+            `so this is a wrong-endpoint problem rather than a missing send — check ` +
+            `FILESEAL_API_BASE_URL (currently ${BASE_URL}).`,
+          true
+        );
+      }
       return textResult(`Send not found: ${id}`, true);
     }
     if (!response.ok) {
       return textResult(
-        `FileSeal API error (HTTP ${response.status}): ${data.error ?? 'Unknown error'}`,
+        `FileSeal API error (HTTP ${response.status}): ${apiDetail(data) || 'no JSON error body (check FILESEAL_API_BASE_URL)'}`,
         true
       );
     }
@@ -498,7 +518,8 @@ server.registerTool(
       // returns 200) and omits the other-API-key case. The model would read
       // "already revoked" and conclude revocation was in effect when the send
       // may have been collected, i.e. downloaded by the recipient.
-      const detail = typeof data.error === 'string' && data.error.length > 0 ? ` (API said: ${data.error})` : '';
+      const serverSaid = apiDetail(data);
+      const detail = serverSaid ? ` (API said: ${serverSaid})` : '';
       return textResult(
         `Could not revoke ${id}: it has already been collected, does not exist, or was not created by this API key.${detail}`,
         true
@@ -506,7 +527,7 @@ server.registerTool(
     }
     if (!response.ok || !data.success) {
       return textResult(
-        `FileSeal API error (HTTP ${response.status}): ${data.error ?? 'Unknown error'}`,
+        `FileSeal API error (HTTP ${response.status}): ${apiDetail(data) || 'no JSON error body (check FILESEAL_API_BASE_URL)'}`,
         true
       );
     }
