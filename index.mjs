@@ -99,14 +99,22 @@ function apiHeaders() {
 
 /**
  * Read a JSON body defensively; on non-JSON return a synthetic shape.
+ *
+ * `fromApi` says whether the body really was JSON. Callers MUST use it rather
+ * than inferring from `error` being a non-empty string: this function coerces
+ * ANY non-JSON body into `{ error: <first 500 chars> }`, so an HTML error page
+ * from a misconfigured origin is indistinguishable from a real API error by
+ * that test — which is how the 404 branch came to blame a valid UUID for what
+ * was actually a wrong FILESEAL_API_BASE_URL.
  */
 async function readJson(response) {
   const text = await response.text();
-  if (!text) return {};
+  if (!text) return { fromApi: false };
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' ? { ...parsed, fromApi: true } : { fromApi: false };
   } catch {
-    return { error: text.slice(0, 500) };
+    return { error: text.slice(0, 500), fromApi: false };
   }
 }
 
@@ -140,9 +148,9 @@ server.registerTool(
       'FileSeal secure send. In "link" mode (default, zero-knowledge) the key never leaves ' +
       'this machine and is returned only inside the share link fragment. In "email" mode ' +
       'FileSeal emails the recipient a working link and stores the key server-side. ' +
-      'Limits: 10MB per file and 50MB per send; accepted types are PDF, DOC, DOCX, TXT, ' +
-      'JPG and PNG. Files are sent inline, so anything over about 3MB of plaintext may ' +
-      'exceed the request body limit even though it is under the 10MB cap.',
+      'Limits: this tool accepts files up to 3MB. Bytes travel inline as base64, so a ' +
+      'larger file would exceed the API request body limit even though FileSeal itself ' +
+      'allows 10MB per file and 50MB per send. Accepted types: PDF, DOC, DOCX, TXT, JPG, PNG.',
     inputSchema: {
       filePath: z
         .string()
@@ -239,10 +247,10 @@ server.registerTool(
     }
     if (bytes.length > INLINE_SAFE_BYTES) {
       return textResult(
-        `Error: ${resolvedFilename ?? 'the file'} is ${(bytes.length / 1024 / 1024).toFixed(1)}MB. ` +
-          `This tool sends file bytes inline as base64, which inflates them by about a third, so ` +
-          `anything over ~${(INLINE_SAFE_BYTES / 1024 / 1024).toFixed(0)}MB exceeds the API's request body limit. ` +
-          `Send a smaller file.`,
+        `Error: ${resolvedFilename ?? 'the file'} is ${(bytes.length / 1024 / 1024).toFixed(1)}MB, over this ` +
+          `tool's ${(INLINE_SAFE_BYTES / 1024 / 1024).toFixed(0)}MB limit. Bytes travel inline as base64, which ` +
+          `inflates them by about a third, so a larger file exceeds the API's request body limit. ` +
+          `FileSeal itself allows 10MB per file; that path is not available through this tool.`,
         true
       );
     }
@@ -288,7 +296,10 @@ server.registerTool(
       expiryHours,
       files: [file],
       ...(message ? { message } : {}),
-      ...(recipientEmail ? { recipientEmail } : {}),
+      // Only in email mode. The server discards it in link mode anyway, but
+      // sending it still puts the address on the wire — and into request logs
+      // and error reporting — under the mode advertised as zero-knowledge.
+      ...(recipientEmail && deliveryMode === 'email' ? { recipientEmail } : {}),
     };
 
     // 4. POST.
@@ -468,7 +479,7 @@ server.registerTool(
     // looks like this API answering; otherwise say so, because "your id is
     // malformed" sends a model looking in the wrong place entirely.
     if (response.status === 404) {
-      if (typeof data.error === 'string' && data.error.length > 0) {
+      if (data.fromApi) {
         return textResult(`Not a valid send id: ${id}`, true);
       }
       return textResult(

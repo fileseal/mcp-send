@@ -27,10 +27,9 @@
         },
         {
           "name": "FILESEAL_API_BASE_URL",
-          "description": "FileSeal API origin. Defaults to the public API; set it only to target a different instance.",
-          "isRequired": false,
-          "isSecret": false,
-          "default": "https://fileseal.uk"
+          "description": "FileSeal API origin \u2014 set to https://fileseal.uk for the public API. Required here because the code falls back to http://localhost:3000, which is not useful for a registry install.",
+          "isRequired": true,
+          "isSecret": false
         }
       ]
     }

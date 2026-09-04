@@ -90,6 +90,15 @@ const stub = createServer((req, res) => {
       } else if (req.url.includes('not-a-uuid')) {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: 'Send not found.' }));
+      } else if (req.url.includes('html-404')) {
+        // What a WRONG BASE URL actually returns: an HTML error page. readJson
+        // coerces it to { error: '<!DOCTYPE...' }, so a discriminator based on
+        // "is data.error a non-empty string" called this a malformed id — the
+        // exact misdirection the branch exists to prevent, and the common case,
+        // while the empty-body shape below is the rare one.
+        res.statusCode = 404;
+        res.setHeader('content-type', 'text/html');
+        res.end('<!DOCTYPE html><html><head><title>404: This page could not be found.</title></head><body>404</body></html>');
       } else if (req.url.includes('bare-404')) {
         // A 404 with NO error body: what a misconfigured origin returns, rather
         // than this API answering. Must not be reported as a malformed id.
@@ -228,6 +237,8 @@ console.log('recipientEmail in link mode');
     name: 'secure_send',
     arguments: { filePath: file, deliveryMode: 'link', recipientEmail: 'someone@example.com' },
   });
+  ok(requests.at(-1).body.recipientEmail === undefined, 'link mode does not put the address on the wire at all');
+  ok(!requests.at(-1).raw.includes('someone@example.com'), 'the address appears nowhere in the request body');
   ok(/no email was sent/i.test(text(res)), 'the result says plainly that no email was sent');
   ok(/ignored in link mode/i.test(text(res)), 'and that recipientEmail was ignored');
 }
@@ -344,6 +355,11 @@ console.log('send_status and revoke_send');
   const malformed = await client.callTool({ name: 'revoke_send', arguments: { id: 'not-a-uuid' } });
   ok(malformed.isError === true && /not a valid send id/i.test(text(malformed)), '404 WITH an api error body is reported as a malformed id');
   ok(!/HTTP 404/.test(text(malformed)), 'and not as a raw HTTP error');
+  const html = await client.callTool({ name: 'revoke_send', arguments: { id: 'html-404' } });
+  ok(html.isError === true, 'an HTML 404 from a wrong base URL is an error');
+  ok(!/not a valid send id/i.test(text(html)), 'and is NOT blamed on the id — this is the COMMON misconfiguration shape');
+  ok(/FILESEAL_API_BASE_URL/.test(text(html)), 'it points at the base URL');
+
   const bare = await client.callTool({ name: 'revoke_send', arguments: { id: 'bare-404' } });
   ok(bare.isError === true, 'a bodyless 404 is still an error');
   ok(!/not a valid send id/i.test(text(bare)), 'but is NOT blamed on the id — that would misdirect the model');

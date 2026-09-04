@@ -4,3 +4,14 @@ node_modules/
 # prints `git add -A`, and this file is the mirror's .gitignore too.
 .env
 .env.*
+
+# The sync's --allow-extra waives these as inert leftovers, but it then prints
+# `git add -A` — and "inert" means "holds no credential", not "safe to publish":
+# a debug log can carry internal paths, hostnames or customer ids. Ignoring them
+# here (this file IS the mirror's .gitignore) means a waived file cannot be
+# committed even if it is left lying around.
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
