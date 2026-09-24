@@ -93,6 +93,48 @@ function textResult(text, isError = false) {
 }
 
 /**
+ * The fetch itself rejected (connection refused, DNS, TLS). Name the origin
+ * that was tried: with the localhost default and no FILESEAL_API_BASE_URL set,
+ * a bare "fetch failed" led the model to tell the user FileSeal was down.
+ * This states a fact (where we tried), not a diagnosis.
+ */
+function networkErrorResult(err) {
+  return textResult(
+    `Error calling FileSeal API: ${err instanceof Error ? err.message : String(err)} ` +
+      `(FILESEAL_API_BASE_URL is ${BASE_URL})`,
+    true
+  );
+}
+
+/**
+ * A response this tool cannot use, for the paths without a branch of their own.
+ *
+ * Report, don't diagnose. An earlier version appended "check
+ * FILESEAL_API_BASE_URL" to every error without a JSON message, which sent
+ * the model to its config for a platform 502/504 at a perfectly good URL. The
+ * base URL is named only where the response PROVES the request missed the API:
+ * a 2xx or 404 that is not this API's JSON. The real routes answer both with
+ * JSON, so neither can have come from them.
+ */
+function apiErrorResult(response, data, url) {
+  const detail = apiDetail(data);
+  if (detail) {
+    return textResult(`FileSeal API error (HTTP ${response.status}): ${detail}`, true);
+  }
+  if (!data.fromApi && (response.ok || response.status === 404)) {
+    return textResult(
+      `FileSeal API returned HTTP ${response.status} without a FileSeal API response for ${url}, ` +
+        `so the request did not reach the FileSeal API. Check FILESEAL_API_BASE_URL (currently ${BASE_URL}).`,
+      true
+    );
+  }
+  return textResult(
+    `FileSeal API error (HTTP ${response.status}): the response carried no FileSeal error message.`,
+    true
+  );
+}
+
+/**
  * Base64-encode a Uint8Array (Node Buffer is fine in this standalone runtime).
  */
 function bytesToBase64(bytes) {
@@ -157,17 +199,24 @@ server.registerTool(
       'Send a file to a person as a one-time, encrypted, auto-deleting download link. ' +
       'Use when you need to deliver a file to a human securely, or want the link to expire ' +
       'after a single download. Encrypts the file client-side (AES-GCM-256) and creates a ' +
-      'FileSeal secure send. In "link" mode (default, zero-knowledge) the key never leaves ' +
-      'this machine and is returned only inside the share link fragment. In "email" mode ' +
-      'FileSeal emails the recipient a working link and stores the key server-side. ' +
-      'Limits: this tool accepts files up to 3MB. Bytes travel inline as base64, so a ' +
-      'larger file would exceed the API request body limit even though FileSeal itself ' +
-      'allows 10MB per file and 50MB per send. Accepted types: PDF, DOC, DOCX, TXT, JPG, PNG.',
+      // "Is never sent to FileSeal", NOT "never leaves this machine": the key is
+      // returned in this tool's result, which the MCP client hands to the model.
+      'FileSeal secure send. In "link" mode (the default) the decryption key is never sent to ' +
+      'FileSeal; it is returned only inside the share link\'s #k= fragment. In "email" mode ' +
+      'FileSeal emails the recipient a working link and stores the key server-side. In both ' +
+      'modes the file name, senderName and message are NOT encrypted: FileSeal stores them ' +
+      'as plain text and anyone with the link can read them. ' +
+      'Limits: one file per call, up to 3MB. Bytes travel inline as base64, so a larger file ' +
+      'would exceed the API request body limit even though FileSeal itself allows 10MB per ' +
+      'file. Accepted types: PDF, DOC, DOCX, TXT, JPG, PNG.',
     inputSchema: {
       filePath: z
         .string()
         .optional()
-        .describe('Absolute or relative path to the file to send.'),
+        .describe(
+          'Path to the file to send. Prefer an absolute path: a relative one resolves against ' +
+            "this server's working directory, not yours."
+        ),
       fileBase64: z
         .string()
         .optional()
@@ -176,10 +225,14 @@ server.registerTool(
       mimeType: z
         .string()
         .optional()
-        .describe('MIME type; inferred from the file extension if omitted.'),
+        .describe('MIME type. Inferred from the extension when using filePath; required with fileBase64.'),
+      // .max(255) matches the API's own bound (route.ts, #620). Without it an
+      // over-long value reached the server and came back as a bare "Invalid
+      // request body." that named no field.
       recipientEmail: z
         .string()
         .email()
+        .max(255)
         .optional()
         .describe(
           'Recipient email — REQUIRED when deliveryMode is "email". IGNORED in "link" mode: ' +
@@ -199,7 +252,26 @@ server.registerTool(
         .string()
         .max(1000)
         .optional()
-        .describe('Optional message to the recipient.'),
+        .describe(
+          'Optional message shown to the recipient. NOT encrypted in either mode: FileSeal ' +
+            'stores it as plain text and anyone with the link can read it, so never put a ' +
+            'password or other secret here.'
+        ),
+      // The API has always accepted senderName; this tool never sent it, so an
+      // email-mode recipient was told the files came from "Someone", in an
+      // email whose safety notice says not to use links from senders you do
+      // not recognise.
+      senderName: z
+        .string()
+        .max(255)
+        .optional()
+        .describe(
+          'Your name or organisation as the recipient should see it, shown in the email ' +
+            'subject and on the download page. Self-declared, not verified. Strongly ' +
+            'recommended in email mode: without it the email says the files are from ' +
+            '"Someone", and the email advises recipients not to use links from senders they ' +
+            'do not recognise.'
+        ),
     },
   },
   async (args) => {
@@ -212,6 +284,7 @@ server.registerTool(
       deliveryMode = 'link',
       expiryHours = 48,
       message,
+      senderName,
     } = args;
 
     // 1. Resolve bytes + filename + mimeType.
@@ -265,7 +338,8 @@ server.registerTool(
     }
     if (!resolvedMimeType) {
       return textResult(
-        'Error: could not infer mimeType — please pass mimeType explicitly.',
+        `Error: could not infer mimeType from "${resolvedFilename}". FileSeal accepts PDF, DOC, ` +
+          'DOCX, TXT, JPG and PNG; if the file is one of these, pass mimeType explicitly.',
         true
       );
     }
@@ -305,6 +379,7 @@ server.registerTool(
       expiryHours,
       files: [file],
       ...(message ? { message } : {}),
+      ...(senderName ? { senderName } : {}),
       // Only in email mode. The server discards it in link mode anyway, but
       // sending it still puts the address on the wire — and into request logs
       // and error reporting — under the mode advertised as zero-knowledge.
@@ -320,18 +395,20 @@ server.registerTool(
         body: JSON.stringify(body),
       });
     } catch (err) {
-      return textResult(
-        `Error calling FileSeal API: ${err instanceof Error ? err.message : String(err)}`,
-        true
-      );
+      return networkErrorResult(err);
     }
 
     const data = await readJson(response);
     if (!response.ok || !data.success) {
-      return textResult(
-        `FileSeal API error (HTTP ${response.status}): ${apiDetail(data) || 'no JSON error body (check FILESEAL_API_BASE_URL)'}`,
-        true
-      );
+      const result = apiErrorResult(response, data, SENDS_URL);
+      // A platform 5xx can arrive after the send was written (the route runs
+      // its insert before the email), so "it failed" is not known here. Say so
+      // rather than letting a retry create a second live link to the file.
+      if (response.status >= 500) {
+        result.content[0].text +=
+          ' The send may still have been created; this tool cannot tell without its id.';
+      }
+      return result;
     }
 
     // 5. Format the result.
@@ -384,7 +461,10 @@ server.registerTool(
   'send_status',
   {
     title: 'Check a FileSeal send status',
-    description: 'Fetch the status, expiry, download count and audit events for a send by id.',
+    description:
+      'Fetch the status, expiry, download count and audit events for a send by id. Only ' +
+      'sends created with the same API key are visible: a send made with another key (for ' +
+      'example before a key was rotated) reads as not found, even if its link still works.',
     inputSchema: {
       id: z.string().describe('The send id returned by secure_send.'),
     },
@@ -397,10 +477,7 @@ server.registerTool(
         headers: apiHeaders(),
       });
     } catch (err) {
-      return textResult(
-        `Error calling FileSeal API: ${err instanceof Error ? err.message : String(err)}`,
-        true
-      );
+      return networkErrorResult(err);
     }
 
     const data = await readJson(response);
@@ -416,13 +493,18 @@ server.registerTool(
           true
         );
       }
-      return textResult(`Send not found: ${id}`, true);
-    }
-    if (!response.ok) {
+      // GET is scoped to the calling key ([id]/route.ts), so "not found" can
+      // mean another key's send, whose link still works.
       return textResult(
-        `FileSeal API error (HTTP ${response.status}): ${apiDetail(data) || 'no JSON error body (check FILESEAL_API_BASE_URL)'}`,
+        `Send not found: ${id}. It may not exist, or it may have been created with a different API key.`,
         true
       );
+    }
+    // fromApi as well as ok: GET's body has no `success` field, so without it
+    // a 200 HTML page (an SPA catch-all or proxy at the configured origin)
+    // rendered as a real result reading "Send undefined / Status: undefined".
+    if (!response.ok || !data.fromApi) {
+      return apiErrorResult(response, data, `${SENDS_URL}/${encodeURIComponent(id)}`);
     }
 
     const events = Array.isArray(data.events) ? data.events : [];
@@ -457,7 +539,10 @@ server.registerTool(
   {
     title: 'Revoke a FileSeal send',
     description:
-      'Revoke a send by id, deleting its encrypted blobs. Idempotent: revoking a send ' +
+      // "Attempts to delete", not "deleting": the route's blob deletes are
+      // best-effort, and the cleanup job removes anything left at expiry.
+      'Revoke a send by id: its link stops working immediately, and FileSeal attempts to ' +
+      'delete the encrypted files from its servers. Idempotent: revoking a send ' +
       'this key already revoked succeeds. Returns an error (409) if the send has been ' +
       'collected, does not exist, or was created by a different API key — the API does ' +
       'not distinguish these. A malformed id returns 404.',
@@ -473,10 +558,7 @@ server.registerTool(
         headers: apiHeaders(),
       });
     } catch (err) {
-      return textResult(
-        `Error calling FileSeal API: ${err instanceof Error ? err.message : String(err)}`,
-        true
-      );
+      return networkErrorResult(err);
     }
 
     const data = await readJson(response);
@@ -526,10 +608,7 @@ server.registerTool(
       );
     }
     if (!response.ok || !data.success) {
-      return textResult(
-        `FileSeal API error (HTTP ${response.status}): ${apiDetail(data) || 'no JSON error body (check FILESEAL_API_BASE_URL)'}`,
-        true
-      );
+      return apiErrorResult(response, data, `${SENDS_URL}/${encodeURIComponent(id)}`);
     }
 
     return textResult(`Send ${data.id} revoked. Status: ${data.status}.`);

@@ -62,6 +62,28 @@ const stub = createServer((req, res) => {
         res.end(JSON.stringify({ error: 'Upgrade required to use the send API.' }));
         return;
       }
+      // Responses that are NOT this API's JSON. Each carries a marker so the
+      // assertions can prove no body text reaches the model.
+      if (raw.includes('html200.pdf')) {
+        // A 200 page at the configured origin (SPA catch-all, captive portal).
+        res.setHeader('content-type', 'text/html');
+        res.end('<!DOCTYPE html><html><body>SPA-CATCHALL-MARKER</body></html>');
+        return;
+      }
+      if (raw.includes('timeout.pdf')) {
+        // What Vercel returns when the function times out: plain text, and the
+        // base URL is CORRECT, so the tool must not blame the config.
+        res.statusCode = 504;
+        res.setHeader('content-type', 'text/plain');
+        res.end('An error occurred with your deployment\n\nFUNCTION_INVOCATION_TIMEOUT MARKER-504');
+        return;
+      }
+      if (raw.includes('html404.pdf')) {
+        res.statusCode = 404;
+        res.setHeader('content-type', 'text/html');
+        res.end('<!DOCTYPE html><html><body>404 MARKER-POST-404</body></html>');
+        return;
+      }
       res.end(JSON.stringify({
         success: true, id: 'stub-send-id', claimUrl: 'https://fileseal.uk/receive/stub-send-id',
         ...(raw.includes('bounce@example.com') ? { emailSent: false } : {}),
@@ -117,6 +139,17 @@ const stub = createServer((req, res) => {
       if (req.url.includes('not-a-uuid')) {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: 'Send not found.' }));
+        return;
+      }
+      if (req.url.includes('html-200')) {
+        res.setHeader('content-type', 'text/html');
+        res.end('<!DOCTYPE html><html><body>SPA-CATCHALL-MARKER</body></html>');
+        return;
+      }
+      if (req.url.includes('html-500')) {
+        res.statusCode = 500;
+        res.setHeader('content-type', 'text/html');
+        res.end('<!DOCTYPE html><html><body>Internal Server Error MARKER-500</body></html>');
         return;
       }
       res.end(JSON.stringify({
@@ -274,6 +307,14 @@ console.log('email mode');
   ok(typeof sent.body.files[0].encryptionKey === 'string', 'email mode DOES send the key (server must decrypt to email a working link)');
   ok(sent.body.recipientEmail === 'someone@example.com', 'recipient forwarded');
   ok(!text(res).includes('#k='), 'no zero-knowledge link claimed in email mode');
+  ok(sent.body.senderName === undefined, 'no senderName is invented when none was given');
+
+  // Without senderName the API tells the recipient the files are from "Someone".
+  await client.callTool({
+    name: 'secure_send',
+    arguments: { filePath: file, deliveryMode: 'email', recipientEmail: 'someone@example.com', senderName: 'Jane Pro' },
+  });
+  ok(requests.at(-1).body.senderName === 'Jane Pro', 'senderName is forwarded to the API');
 }
 
 console.log('input validation (no request should reach the API)');
@@ -377,6 +418,94 @@ console.log('send_status and revoke_send');
   ok(bare.isError === true, 'a bodyless 404 is still an error');
   ok(!/not a valid send id/i.test(text(bare)), 'but is NOT blamed on the id — that would misdirect the model');
   ok(/FILESEAL_API_BASE_URL/.test(text(bare)), 'it points at the base URL instead');
+}
+
+console.log('responses that are not this API');
+{
+  // Every case here was green with the behaviour deleted before 0.1.1's
+  // pre-publish review added it (mutation-tested): no stub route returned a
+  // non-JSON body through a generic error branch or a 2xx.
+  const markers = /SPA-CATCHALL-MARKER|MARKER-500|MARKER-504|MARKER-POST-404|FUNCTION_INVOCATION_TIMEOUT|<html|<!DOCTYPE/i;
+
+  const s200 = await client.callTool({ name: 'send_status', arguments: { id: 'html-200' } });
+  ok(s200.isError === true, 'send_status: a 200 HTML page is an error, not a result');
+  ok(!/undefined/.test(text(s200)), 'and renders no "Send undefined / Status: undefined"');
+  ok(/FILESEAL_API_BASE_URL/.test(text(s200)), 'and names the base URL: a 2xx that is not JSON cannot be the API');
+  ok(!markers.test(text(s200)), 'and pastes none of the page into the model context');
+
+  const s500 = await client.callTool({ name: 'send_status', arguments: { id: 'html-500' } });
+  ok(s500.isError === true && /HTTP 500/.test(text(s500)), 'send_status: an HTML 500 is an error carrying its status');
+  ok(!markers.test(text(s500)), 'with none of the page in the model context');
+  ok(!/FILESEAL_API_BASE_URL/.test(text(s500)), 'and WITHOUT blaming the config: a 500 can come from a correct URL');
+
+  const html200 = join(dir, 'html200.pdf');
+  writeFileSync(html200, '%PDF-1.4\nhtml200\n%%EOF\n');
+  const p200 = await client.callTool({ name: 'secure_send', arguments: { filePath: html200, deliveryMode: 'link' } });
+  ok(p200.isError === true, 'secure_send: a 200 HTML page is an error');
+  ok(!/Share link/.test(text(p200)), 'and renders NO share link');
+  ok(/FILESEAL_API_BASE_URL/.test(text(p200)), 'and names the base URL');
+  ok(!markers.test(text(p200)), 'with none of the page in the model context');
+
+  const timeout = join(dir, 'timeout.pdf');
+  writeFileSync(timeout, '%PDF-1.4\ntimeout\n%%EOF\n');
+  const p504 = await client.callTool({ name: 'secure_send', arguments: { filePath: timeout, deliveryMode: 'link' } });
+  ok(p504.isError === true && /HTTP 504/.test(text(p504)), 'secure_send: a platform 504 is an error carrying its status');
+  ok(!markers.test(text(p504)), 'with none of the platform text in the model context');
+  ok(!/FILESEAL_API_BASE_URL/.test(text(p504)), 'and WITHOUT blaming the config');
+  ok(/may still have been created/.test(text(p504)), 'and says the send may exist, so a retry is not assumed safe');
+
+  const html404 = join(dir, 'html404.pdf');
+  writeFileSync(html404, '%PDF-1.4\nhtml404\n%%EOF\n');
+  const p404 = await client.callTool({ name: 'secure_send', arguments: { filePath: html404, deliveryMode: 'link' } });
+  ok(p404.isError === true && /FILESEAL_API_BASE_URL/.test(text(p404)), 'secure_send: an HTML 404 names the base URL');
+  ok(!markers.test(text(p404)), 'with none of the page in the model context');
+  ok(!/may still have been created/.test(text(p404)), 'and a 404 is not treated as a possible success');
+}
+
+console.log('input bounds');
+{
+  const before = requests.length;
+  const long = `${'a'.repeat(300)}@example.com`;
+  const res = await client.callTool({
+    name: 'secure_send',
+    arguments: { filePath: file, deliveryMode: 'email', recipientEmail: long },
+  });
+  ok(res.isError === true, 'a recipientEmail over the API\'s 255 limit is refused by the tool');
+  ok(requests.length === before, 'before any request is made');
+}
+
+console.log('what the model is told');
+{
+  const { tools } = await client.listTools();
+  const send = tools.find((t) => t.name === 'secure_send');
+  const revoke = tools.find((t) => t.name === 'revoke_send');
+  const status = tools.find((t) => t.name === 'send_status');
+  ok(/NOT encrypted/.test(send.inputSchema.properties.message.description), 'message is described as NOT encrypted');
+  ok(!/never leaves this machine/.test(send.description), 'the key is not claimed to stay on this machine (it is returned to the model)');
+  ok(/never sent to FileSeal/.test(send.description), 'what IS true is stated instead');
+  ok(send.inputSchema.properties.senderName !== undefined, 'senderName is offered');
+  ok(/attempts to delete/.test(revoke.description), 'revoke does not claim deletion as done');
+  ok(/different API key|another key/.test(status.description), 'send_status says reads are scoped to the key');
+}
+
+console.log('unreachable API');
+{
+  // A port that was open a moment ago and is now closed: fetch rejects, which
+  // is what the localhost default produces when FILESEAL_API_BASE_URL is unset.
+  const probe = createServer();
+  await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+  const deadBase = `http://127.0.0.1:${probe.address().port}`;
+  await new Promise((r) => probe.close(r));
+  const deadClient = new Client({ name: 'stub-e2e-dead', version: '0.0.0' });
+  await deadClient.connect(new StdioClientTransport({
+    command: 'node',
+    args: ['index.mjs'],
+    env: { ...process.env, FILESEAL_API_KEY: 'stub-key', FILESEAL_API_BASE_URL: deadBase },
+  }));
+  const res = await deadClient.callTool({ name: 'send_status', arguments: { id: 'stub-send-id' } });
+  ok(res.isError === true, 'a refused connection is an error');
+  ok(text(res).includes(`FILESEAL_API_BASE_URL is ${deadBase}`), 'naming the origin it tried, so "fetch failed" is not read as FileSeal being down');
+  await deadClient.close();
 }
 
 await client.close();

@@ -9,30 +9,39 @@ This package is self-contained: it does **not** import from the FileSeal Next
 app. Its crypto (`crypto.mjs`) mirrors FileSeal's server-side attachment format
 byte-for-byte — a 12-byte IV followed by AES-GCM ciphertext, with the key
 base64url-encoded in the link fragment — so that ciphertext it produces
-decrypts on the FileSeal `/receive/[id]` page. That format is pinned by a
-round-trip test in the (private) FileSeal application repo, so treat any change
-to `crypto.mjs` as a breaking change needing a version bump.
+decrypts on the FileSeal `/receive/[id]` page. That page fixes the format: a
+changed `crypto.mjs` produces links that will not open.
 
 ## Tools
 
 - **`secure_send`** — encrypt a file and create a send.
   - Inputs: `filePath` *or* (`fileBase64` + `filename` + `mimeType`),
     `recipientEmail?`, `deliveryMode` (`'link'` default | `'email'`),
-    `expiryHours?` (1-168, default 48), `message?`.
-  - **link** mode (default, zero-knowledge): the AES key never leaves your
-    machine; the tool returns the full share link with the key in its `#k=`
-    fragment.
+    `expiryHours?` (1-168, default 48), `message?`, `senderName?`.
+  - **link** mode (default, zero-knowledge for the file): the AES key is never
+    sent to FileSeal; the tool returns the full share link with the key in its
+    `#k=` fragment.
   - **email** mode: FileSeal emails the recipient a working link and stores the
-    key server-side. Requires `recipientEmail`.
+    key server-side. Requires `recipientEmail`. Pass `senderName` too: without
+    it the email says the files are from "Someone".
+  - **Not encrypted, in either mode:** the file name, `senderName` and
+    `message`. FileSeal stores them as plain text and anyone with the link can
+    read them, so keep secrets out of `message`.
+  - **Limits:** one file per call, up to 3 MB. The file travels inline as
+    base64 in the request body, which is what caps it; FileSeal's own 10 MB per
+    file is not reachable through this tool. Types: PDF, DOC, DOCX, TXT, JPG,
+    PNG.
 - **`send_status`** — `{ id }` → status, expiry, download count, audit events.
-- **`revoke_send`** — `{ id }` → revoke the send and delete its blobs.
+  Only sends created with the same API key are visible.
+- **`revoke_send`** — `{ id }` → the link stops working immediately, and
+  FileSeal attempts to delete the encrypted files from its servers.
 
 ## Environment variables
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `FILESEAL_API_KEY` | yes | — | Bearer token sent as `Authorization: Bearer <key>` on every call. The server exits at startup if unset. |
-| `FILESEAL_API_BASE_URL` | no | `http://localhost:3000` | API origin. Routes are `<base>/v1/sends`. |
+| `FILESEAL_API_BASE_URL` | yes, in practice | `http://localhost:3000` | API origin: set it to `https://fileseal.uk`. The localhost default only suits developing FileSeal itself. Routes are `<base>/v1/sends`. |
 
 ## Running
 
@@ -79,19 +88,3 @@ node index.mjs
 The `"fileseal-send"` key is just the local server label; the npm package is
 `@fileseal/send`. To run a local checkout instead, point `command`/`args` at
 your copy of `index.mjs`.
-
-## Discovery / MCP registry listing (GEO)
-
-Copy for MCP registries and marketplaces. The literal name `fileseal-send` and the
-one-line description are what assistants match against user intent, so keep them
-stable and verb-first.
-
-- **Name:** `fileseal-send`
-- **npm package:** `@fileseal/send` (`npx -y @fileseal/send`)
-- **One-line description:** Send a file to a person as a one-time, encrypted, auto-deleting download link.
-- **Tags:** `file-sharing`, `secure`, `encryption`, `one-time`, `gdpr`, `file-delivery`, `email`
-- **Tools:** `secure_send`, `send_status`, `revoke_send`
-- **Homepage:** https://fileseal.uk/developers · **Docs:** https://fileseal.uk/developers/docs
-- **Longer description:** Give an AI agent a tool to deliver a file to a human securely.
-  Files are encrypted with AES-256; a one-click zero-knowledge mode keeps the key out of
-  FileSeal. Each link works once, then the file is deleted, with an audit trail. UK-hosted, GDPR-ready.
