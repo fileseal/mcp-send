@@ -14,6 +14,7 @@
  * Run:  node stub-e2e.mjs
  */
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { writeFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -505,7 +506,7 @@ console.log('what the model is told');
 console.log('unreachable API');
 {
   // A port that was open a moment ago and is now closed: fetch rejects, which
-  // is what the localhost default produces when FILESEAL_API_BASE_URL is unset.
+  // is what a local FILESEAL_API_BASE_URL with nothing listening produces.
   const probe = createServer();
   await new Promise((r) => probe.listen(0, '127.0.0.1', r));
   const deadBase = `http://127.0.0.1:${probe.address().port}`;
@@ -520,6 +521,28 @@ console.log('unreachable API');
   ok(res.isError === true, 'a refused connection is an error');
   ok(text(res).includes(`FILESEAL_API_BASE_URL is ${deadBase}`), 'naming the origin it tried, so "fetch failed" is not read as FileSeal being down');
   await deadClient.close();
+}
+
+console.log('default API origin');
+{
+  // Read from the startup line rather than from a request, so this needs no
+  // network and never touches production.
+  const startupOrigin = (baseUrl) => new Promise((resolve, reject) => {
+    const env = { ...process.env, FILESEAL_API_KEY: 'stub-key' };
+    delete env.FILESEAL_API_BASE_URL;
+    if (baseUrl !== undefined) env.FILESEAL_API_BASE_URL = baseUrl;
+    const child = spawn('node', ['index.mjs'], { env, stdio: ['pipe', 'ignore', 'pipe'] });
+    let err = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error('no startup line: ' + err)); }, 10_000);
+    child.stderr.on('data', (d) => {
+      err += d;
+      const m = /running on stdio \(API: ([^)]*)\)/.exec(err);
+      if (m) { clearTimeout(timer); child.kill(); resolve(m[1]); }
+    });
+  });
+  ok(await startupOrigin(undefined) === 'https://fileseal.uk', 'with FILESEAL_API_BASE_URL unset, the server uses production');
+  ok(await startupOrigin('') === 'https://fileseal.uk', 'an empty FILESEAL_API_BASE_URL also falls back to production, not to ""');
+  ok(await startupOrigin('http://127.0.0.1:4000/') === 'http://127.0.0.1:4000', 'a set value wins, without its trailing slash');
 }
 
 await client.close();

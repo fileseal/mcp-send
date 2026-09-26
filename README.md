@@ -41,7 +41,7 @@ changed `crypto.mjs` produces links that will not open.
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `FILESEAL_API_KEY` | yes | none | Bearer token sent as `Authorization: Bearer <key>` on every call. The server exits at startup if unset. |
-| `FILESEAL_API_BASE_URL` | yes, in practice | `http://localhost:3000` | API origin: set it to `https://fileseal.uk`. The localhost default only suits developing FileSeal itself. Routes are `<base>/v1/sends`. |
+| `FILESEAL_API_BASE_URL` | no | `https://fileseal.uk` | API origin. Change it only to point at another FileSeal instance, such as `http://localhost:3000` when developing FileSeal itself. Routes are `<base>/v1/sends`. Versions before 0.1.3 defaulted to `http://localhost:3000`, so set it explicitly if you pin an older version. |
 
 ## Running
 

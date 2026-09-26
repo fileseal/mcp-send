@@ -9,8 +9,9 @@
  *
  * Env:
  *   FILESEAL_API_KEY       (required) — Bearer token for the /v1 API.
- *   FILESEAL_API_BASE_URL  (default 'http://localhost:3000') — API origin.
- *                          NOTE: routes live under <base>/v1/sends.
+ *   FILESEAL_API_BASE_URL  (default 'https://fileseal.uk') — API origin. Set it
+ *                          to e.g. http://localhost:3000 to develop against a
+ *                          local FileSeal. NOTE: routes live under <base>/v1/sends.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -27,7 +28,12 @@ import {
 } from './crypto.mjs';
 
 const API_KEY = process.env.FILESEAL_API_KEY;
-const BASE_URL = (process.env.FILESEAL_API_BASE_URL ?? 'http://localhost:3000').replace(
+// Production by default since 0.1.3. Until then the default was localhost, so a
+// published-package user who set only the API key got connection-refused
+// against their own machine. `||`, not `??`: now that the registry lists the
+// variable as optional, a client can pass an empty string for a blank field,
+// and `??` would keep it and turn every URL into a bare "/v1/sends".
+const BASE_URL = (process.env.FILESEAL_API_BASE_URL || 'https://fileseal.uk').replace(
   /\/+$/,
   ''
 );
@@ -94,8 +100,8 @@ function textResult(text, isError = false) {
 
 /**
  * The fetch itself rejected (connection refused, DNS, TLS). Name the origin
- * that was tried: with the localhost default and no FILESEAL_API_BASE_URL set,
- * a bare "fetch failed" led the model to tell the user FileSeal was down.
+ * that was tried: under the old localhost default, with no FILESEAL_API_BASE_URL
+ * set, a bare "fetch failed" led the model to tell the user FileSeal was down.
  * This states a fact (where we tried), not a diagnosis.
  */
 function networkErrorResult(err) {
@@ -649,7 +655,9 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write('fileseal-send MCP server running on stdio.\n');
+  // Name the origin: it is the one setting a wrong value silently changes, and
+  // stderr is where MCP clients surface a server's own log.
+  process.stderr.write(`fileseal-send MCP server running on stdio (API: ${BASE_URL}).\n`);
 }
 
 main().catch((err) => {

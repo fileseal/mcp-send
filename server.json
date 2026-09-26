@@ -8,13 +8,13 @@
     "url": "https://github.com/fileseal/mcp-send",
     "source": "github"
   },
-  "version": "0.1.2",
+  "version": "0.1.3",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@fileseal/send",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "transport": {
         "type": "stdio"
       },
@@ -27,9 +27,10 @@
         },
         {
           "name": "FILESEAL_API_BASE_URL",
-          "description": "FileSeal API origin \u2014 set to https://fileseal.uk for the public API. Required here because the code falls back to http://localhost:3000, which is not useful for a registry install.",
-          "isRequired": true,
-          "isSecret": false
+          "description": "FileSeal API origin. Defaults to https://fileseal.uk; change it only to point at another FileSeal instance.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "https://fileseal.uk"
         }
       ]
     }
