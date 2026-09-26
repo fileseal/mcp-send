@@ -35,8 +35,9 @@ it.
 
 ## What the plugin runs and sends
 
-- It runs `npx -y @fileseal/send@0.1.2`, which downloads that package and its
-  dependencies from the npm registry.
+- It runs the published `@fileseal/send` package with `npx`, pinned to the
+  exact version in `.claude-plugin/plugin.json`. `npx` downloads that package
+  and its dependencies from the npm registry.
 - The file is encrypted on your computer (AES-GCM-256) before it is uploaded,
   and the server sends it only to `https://fileseal.uk`. It contacts no other
   host and sends no telemetry.
