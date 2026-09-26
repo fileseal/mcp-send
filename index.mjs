@@ -195,6 +195,18 @@ server.registerTool(
   'secure_send',
   {
     title: 'Secure send a file via FileSeal',
+    // Every hint is explicit because the spec's defaults are not safe to rely
+    // on: an omitted destructiveHint reads as TRUE, so before these existed all
+    // three tools presented as destructive. Sending only adds a send, but each
+    // call adds another (not idempotent) and it reaches a person outside the
+    // caller's account (open world).
+    annotations: {
+      title: 'Secure send a file via FileSeal',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     description:
       'Send a file to a person as a one-time, encrypted, auto-deleting download link. ' +
       'Use when you need to deliver a file to a human securely, or want the link to expire ' +
@@ -461,6 +473,12 @@ server.registerTool(
   'send_status',
   {
     title: 'Check a FileSeal send status',
+    // A GET scoped to the caller's own sends: changes nothing, reaches no one.
+    annotations: {
+      title: 'Check a FileSeal send status',
+      readOnlyHint: true,
+      openWorldHint: false,
+    },
     description:
       'Fetch the status, expiry, download count and audit events for a send by id. Only ' +
       'sends created with the same API key are visible: a send made with another key (for ' +
@@ -538,6 +556,16 @@ server.registerTool(
   'revoke_send',
   {
     title: 'Revoke a FileSeal send',
+    // Destructive: the link dies and the files are deleted, which cannot be
+    // undone. Idempotent because a repeat revoke by the same key returns 200:
+    // the route's UPDATE excludes only 'collected' and coalesces cancelledAt.
+    annotations: {
+      title: 'Revoke a FileSeal send',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     description:
       // "Attempts to delete", not "deleting": the route's blob deletes are
       // best-effort, and the cleanup job removes anything left at expiry.

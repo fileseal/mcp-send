@@ -1,0 +1,16 @@
+{
+  "name": "fileseal",
+  "description": "FileSeal's Claude Code plugin: send a file as a one-time, encrypted, auto-deleting download link.",
+  "owner": {
+    "name": "FileSeal",
+    "email": "support@fileseal.uk",
+    "url": "https://fileseal.uk"
+  },
+  "plugins": [
+    {
+      "name": "fileseal",
+      "source": "./claude-plugin",
+      "description": "Send a file to a person as a one-time, encrypted, auto-deleting download link, then check or revoke it."
+    }
+  ]
+}

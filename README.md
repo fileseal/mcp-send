@@ -7,14 +7,14 @@ three tools to an MCP client (e.g. Claude).
 
 This package is self-contained: it does **not** import from the FileSeal Next
 app. Its crypto (`crypto.mjs`) mirrors FileSeal's server-side attachment format
-byte-for-byte — a 12-byte IV followed by AES-GCM ciphertext, with the key
-base64url-encoded in the link fragment — so that ciphertext it produces
+byte-for-byte (a 12-byte IV followed by AES-GCM ciphertext, with the key
+base64url-encoded in the link fragment), so that ciphertext it produces
 decrypts on the FileSeal `/receive/[id]` page. That page fixes the format: a
 changed `crypto.mjs` produces links that will not open.
 
 ## Tools
 
-- **`secure_send`** — encrypt a file and create a send.
+- **`secure_send`**: encrypt a file and create a send.
   - Inputs: `filePath` *or* (`fileBase64` + `filename` + `mimeType`),
     `recipientEmail?`, `deliveryMode` (`'link'` default | `'email'`),
     `expiryHours?` (1-168, default 48), `message?`, `senderName?`.
@@ -31,21 +31,21 @@ changed `crypto.mjs` produces links that will not open.
     base64 in the request body, which is what caps it; FileSeal's own 10 MB per
     file is not reachable through this tool. Types: PDF, DOC, DOCX, TXT, JPG,
     PNG.
-- **`send_status`** — `{ id }` → status, expiry, download count, audit events.
+- **`send_status`**: `{ id }` → status, expiry, download count, audit events.
   Only sends created with the same API key are visible.
-- **`revoke_send`** — `{ id }` → the link stops working immediately, and
+- **`revoke_send`**: `{ id }` → the link stops working immediately, and
   FileSeal attempts to delete the encrypted files from its servers.
 
 ## Environment variables
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `FILESEAL_API_KEY` | yes | — | Bearer token sent as `Authorization: Bearer <key>` on every call. The server exits at startup if unset. |
+| `FILESEAL_API_KEY` | yes | none | Bearer token sent as `Authorization: Bearer <key>` on every call. The server exits at startup if unset. |
 | `FILESEAL_API_BASE_URL` | yes, in practice | `http://localhost:3000` | API origin: set it to `https://fileseal.uk`. The localhost default only suits developing FileSeal itself. Routes are `<base>/v1/sends`. |
 
 ## Running
 
-No install needed — `npx` fetches and runs the latest published version:
+No install needed: `npx` fetches and runs the latest published version:
 
 ```bash
 FILESEAL_API_KEY=fsk_... \
@@ -88,3 +88,18 @@ node index.mjs
 The `"fileseal-send"` key is just the local server label; the npm package is
 `@fileseal/send`. To run a local checkout instead, point `command`/`args` at
 your copy of `index.mjs`.
+
+## As a Claude Code plugin
+
+The [`claude-plugin/`](claude-plugin/) folder packages this server as a Claude
+Code plugin, with a skill that tells Claude how to use it. The plugin asks for
+your API key when you enable it and keeps it in secure storage rather than in
+your settings files. To install it from this repository:
+
+```text
+/plugin marketplace add fileseal/mcp-send
+/plugin install fileseal@fileseal
+```
+
+It works in Claude Code only. The [plugin's README](claude-plugin/README.md)
+explains why, and lists what it runs and sends.

@@ -486,6 +486,20 @@ console.log('what the model is told');
   ok(send.inputSchema.properties.senderName !== undefined, 'senderName is offered');
   ok(/attempts to delete/.test(revoke.description), 'revoke does not claim deletion as done');
   ok(/different API key|another key/.test(status.description), 'send_status says reads are scoped to the key');
+  // The directory requires these hints, and the spec defaults destructiveHint
+  // to TRUE, so each is pinned explicitly rather than trusted to a default.
+  ok(send.annotations?.readOnlyHint === false && send.annotations?.destructiveHint === false,
+    'secure_send is annotated as writing but not destructive');
+  ok(send.annotations?.idempotentHint === false && send.annotations?.openWorldHint === true,
+    'secure_send is annotated as not idempotent and reaching an open world');
+  ok(status.annotations?.readOnlyHint === true, 'send_status is annotated read-only');
+  ok(revoke.annotations?.readOnlyHint === false && revoke.annotations?.destructiveHint === true,
+    'revoke_send is annotated destructive');
+  ok(revoke.annotations?.idempotentHint === true, 'revoke_send is annotated idempotent');
+  for (const t of [send, status, revoke]) {
+    ok(typeof t.title === 'string' && t.title.length > 0 && t.annotations?.title === t.title,
+      `${t.name} carries the same title at the top level and in its annotations`);
+  }
 }
 
 console.log('unreachable API');

@@ -1,0 +1,34 @@
+{
+  "name": "fileseal",
+  "displayName": "FileSeal",
+  "version": "0.1.2",
+  "description": "Send a file to a person as a one-time, encrypted, auto-deleting download link, then check or revoke it.",
+  "author": {
+    "name": "FileSeal",
+    "email": "support@fileseal.uk",
+    "url": "https://fileseal.uk"
+  },
+  "homepage": "https://fileseal.uk/developers",
+  "repository": "https://github.com/fileseal/mcp-send",
+  "license": "MIT",
+  "keywords": ["fileseal", "secure-send", "encryption", "file-sharing", "one-time-link"],
+  "mcpServers": {
+    "fileseal-send": {
+      "command": "npx",
+      "args": ["-y", "@fileseal/send@0.1.2"],
+      "env": {
+        "FILESEAL_API_KEY": "${user_config.api_key}",
+        "FILESEAL_API_BASE_URL": "https://fileseal.uk"
+      }
+    }
+  },
+  "userConfig": {
+    "api_key": {
+      "type": "string",
+      "title": "FileSeal API key",
+      "description": "Create one in FileSeal under Settings, Developer Tools, API keys. It is sent only to fileseal.uk, as the bearer token on each call.",
+      "sensitive": true,
+      "required": true
+    }
+  }
+}
