@@ -318,11 +318,79 @@ console.log('email mode');
   ok(requests.at(-1).body.senderName === 'Jane Pro', 'senderName is forwarded to the API');
 }
 
+console.log('several files in one send');
+{
+  const a = join(dir, 'letter.pdf');
+  const b = join(dir, 'photo.png');
+  writeFileSync(a, '%PDF-1.4\nfirst file\n%%EOF\n');
+  writeFileSync(b, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('second file')]));
+  const before = requests.length;
+  const res = await client.callTool({ name: 'secure_send', arguments: { filePaths: [a, b], deliveryMode: 'link' } });
+  const sent = requests.at(-1);
+  ok(!res.isError, 'filePaths with two files succeeds');
+  ok(requests.length === before + 1, 'as ONE request, so one send and one link');
+  ok(sent.body.files.length === 2, 'carrying both files');
+  ok(sent.body.files[0].filename === 'letter.pdf' && sent.body.files[1].filename === 'photo.png', 'each under its own name, in order');
+  ok(sent.body.files[0].mimeType === 'application/pdf' && sent.body.files[1].mimeType === 'image/png', 'each with the type from its own extension');
+  ok(sent.body.files.every((f) => f.encryptionKey === undefined), 'ZERO-KNOWLEDGE: no encryptionKey on any file');
+  const frag = /#k=([A-Za-z0-9_-]+)$/.exec(text(res).match(/Share link: (\S+)/)?.[1] ?? '');
+  ok(!!frag, 'one share link with a #k= fragment');
+  const keyRaw = frag ? Buffer.from(frag[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64') : Buffer.alloc(0);
+  ok(frag && !sent.raw.includes(keyRaw.toString('base64')) && !sent.raw.includes(frag[1]), 'ZERO-KNOWLEDGE: the key appears nowhere in the body');
+  // The receive page decrypts every file of a link-mode send with the ONE
+  // fragment key, so each file must open with it.
+  const opened = [];
+  for (const f of sent.body.files) {
+    const ct = Buffer.from(f.ciphertextBase64, 'base64');
+    try {
+      const ck = await crypto.subtle.importKey('raw', keyRaw, { name: 'AES-GCM' }, false, ['decrypt']);
+      opened.push(Buffer.from(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ct.subarray(0, 12) }, ck, ct.subarray(12))));
+    } catch { opened.push(null); }
+  }
+  ok(opened[0]?.equals(readFileSync(a)) && opened[1]?.equals(readFileSync(b)), 'the ONE fragment key decrypts EVERY file back to its original');
+  const ivs = sent.body.files.map((f) => Buffer.from(f.ciphertextBase64, 'base64').subarray(0, 12).toString('hex'));
+  ok(ivs[0] !== ivs[1], 'and each file has its own IV, so the shared key never reuses a nonce');
+
+  const mail = await client.callTool({
+    name: 'secure_send',
+    arguments: { filePaths: [a, b], deliveryMode: 'email', recipientEmail: 'someone@example.com', senderName: 'Jane Pro' },
+  });
+  const mailBody = requests.at(-1).body;
+  ok(!mail.isError && mailBody.files.length === 2, 'email mode sends both files too');
+  ok(typeof mailBody.files[0].encryptionKey === 'string' && mailBody.files[0].encryptionKey === mailBody.files[1].encryptionKey,
+    'with the same key on each, which the server needs to email a working link');
+
+  const two = join(dir, 'two-mb.pdf');
+  const oneAndHalf = join(dir, 'one-and-half-mb.pdf');
+  writeFileSync(two, Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(2 * 1024 * 1024, 0x43)]));
+  writeFileSync(oneAndHalf, Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(1.5 * 1024 * 1024, 0x44)]));
+  const weird = join(dir, 'notes.bin');
+  const blank = join(dir, 'blank.pdf');
+  writeFileSync(weird, 'data');
+  writeFileSync(blank, '');
+  const eleven = Array.from({ length: 11 }, () => a);
+  const beforeRefusals = requests.length;
+  const refusals = [
+    [{ filePaths: [two, oneAndHalf], deliveryMode: 'link' }, /2 files total 3\.5MB, over this tool's 3MB limit/, 'files each under 3MB but over it together are refused, with the total'],
+    [{ filePaths: [a, weird], deliveryMode: 'link' }, /could not infer mimeType from "notes\.bin"/, 'an unknown type among several is refused, naming that file'],
+    [{ filePaths: [a, blank], deliveryMode: 'link' }, /blank\.pdf is empty/, 'an empty file among several is refused, naming it'],
+    [{ filePaths: [a], filePath: a, deliveryMode: 'link' }, /filePaths on its own/, 'filePaths with filePath is refused rather than guessed'],
+    [{ filePaths: [a, b], filename: 'x.pdf', deliveryMode: 'link' }, /cannot be used with filePaths/, 'filename with filePaths is refused'],
+    [{ filePaths: eleven, deliveryMode: 'link' }, /at most 10 element/, 'more than 10 files is refused by the schema'],
+    [{ filePaths: [], deliveryMode: 'link' }, /at least 1 element/, 'an empty filePaths list is refused by the schema'],
+  ];
+  for (const [args, pattern, label] of refusals) {
+    const r = await client.callTool({ name: 'secure_send', arguments: args });
+    ok(r.isError === true && pattern.test(text(r)), label);
+  }
+  ok(requests.length === beforeRefusals, 'and none of those refusals sent anything');
+}
+
 console.log('input validation (no request should reach the API)');
 {
   const before = requests.length;
   const cases = [
-    [{ deliveryMode: 'link' }, /provide either filePath or fileBase64/, 'neither filePath nor fileBase64'],
+    [{ deliveryMode: 'link' }, /provide filePath, filePaths or fileBase64/, 'no file input at all'],
     [{ fileBase64: 'aGk=', deliveryMode: 'link' }, /filename and mimeType/, 'fileBase64 without filename/mimeType'],
     [{ filePath: file, deliveryMode: 'email' }, /recipientEmail is required/, 'email mode without a recipient'],
     [{ filePath: join(dir, 'missing.pdf'), deliveryMode: 'link' }, /Error reading file/, 'unreadable path'],
@@ -487,6 +555,9 @@ console.log('what the model is told');
   ok(send.inputSchema.properties.senderName !== undefined, 'senderName is offered');
   ok(/attempts to delete/.test(revoke.description), 'revoke does not claim deletion as done');
   ok(/different API key|another key/.test(status.description), 'send_status says reads are scoped to the key');
+  ok(/filePaths/.test(send.description) && /ONE link/.test(send.description), 'secure_send tells the model to pass several files together for one link');
+  ok(send.inputSchema.properties.filePaths?.maxItems === 10, 'filePaths accepts at most 10 files, matching the API');
+  ok(/3MB per call in total/.test(send.description), 'and says the 3MB limit is for the whole call');
   // The directory requires these hints, and the spec defaults destructiveHint
   // to TRUE, so each is pinned explicitly rather than trusted to a default.
   ok(send.annotations?.readOnlyHint === false && send.annotations?.destructiveHint === false,

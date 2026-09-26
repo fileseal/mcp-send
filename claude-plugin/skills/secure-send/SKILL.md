@@ -11,19 +11,19 @@ The tools are `secure_send`, `send_status` and `revoke_send`.
 
 Confirm these with the user unless they have already said them:
 
-1. **The file.** Pass it as `filePath`, with an absolute path. Avoid `fileBase64` for anything but a very small file, because it means writing the whole file out as base64 inside the tool call.
+1. **The files.** Pass one file as `filePath`, or several as `filePaths` so they arrive under one link, using absolute paths. Calling once per file makes a separate link for each. Avoid `fileBase64` for anything but a very small file, because it means writing the whole file out as base64 inside the tool call.
 2. **The recipient.**
 3. **The delivery mode.** It decides who holds the decryption key, so do not pick it silently.
    - `link` (the default): the key is never sent to FileSeal. The tool returns a link carrying the key after `#k=`, and the user passes that link to the recipient. `recipientEmail` is ignored and no email is sent.
    - `email`: FileSeal emails the recipient a working link, so FileSeal stores the key on its servers. It needs `recipientEmail`. Pass `senderName` too, as the name the recipient will recognise: without it the email says the file is from "Someone", and the email warns recipients about links from senders they do not recognise.
 
-Check the limits before calling rather than letting the call fail: one file per call, 3MB at most, and only PDF, DOC, DOCX, TXT, JPG or PNG. For a larger file, say that this tool cannot send it. A PDF, DOC, DOCX, JPG or PNG of up to 10MB can be sent from the FileSeal dashboard instead; the dashboard does not accept TXT files. Several files mean several sends, each with its own link.
+Check the limits before calling rather than letting the call fail: up to 10 files per call, 3MB in total, and only PDF, DOC, DOCX, TXT, JPG or PNG. If the files together are over 3MB, send them in smaller groups, each of which gets its own link. For a single file over 3MB, say that this tool cannot send it. A PDF, DOC, DOCX, JPG or PNG of up to 10MB can be sent from the FileSeal dashboard instead; the dashboard does not accept TXT files.
 
 `expiryHours` runs from 1 to 168. The default is 48.
 
 ## What is not encrypted
 
-In both modes FileSeal stores the file name, `senderName` and `message` as plain text, and anyone with the link can read them. Never put a password, account number or other secret in `message`. If the file name itself gives something away, pass a neutral `filename` that keeps the same extension, because the extension sets the file type.
+In both modes FileSeal stores the file name, `senderName` and `message` as plain text, and anyone with the link can read them. Never put a password, account number or other secret in `message`. If a file name itself gives something away, pass a neutral `filename` that keeps the same extension, because the extension sets the file type. `filename` works only with `filePath`, so rename such a file before sending it with others.
 
 ## After sending
 

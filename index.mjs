@@ -224,9 +224,11 @@ server.registerTool(
       'FileSeal emails the recipient a working link and stores the key server-side. In both ' +
       'modes the file name, senderName and message are NOT encrypted: FileSeal stores them ' +
       'as plain text and anyone with the link can read them. ' +
-      'Limits: one file per call, up to 3MB. Bytes travel inline as base64, so a larger file ' +
-      'would exceed the API request body limit even though FileSeal itself allows 10MB per ' +
-      'file. Accepted types: PDF, DOC, DOCX, TXT, JPG, PNG.',
+      'To send several files under ONE link, pass them together as filePaths (up to 10) ' +
+      'rather than calling this tool once per file, which makes a separate link for each. ' +
+      'Limits: 3MB per call in total. Bytes travel inline as base64, so more would exceed ' +
+      'the API request body limit even though FileSeal itself allows 10MB per file. ' +
+      'Accepted types: PDF, DOC, DOCX, TXT, JPG, PNG.',
     inputSchema: {
       filePath: z
         .string()
@@ -234,6 +236,16 @@ server.registerTool(
         .describe(
           'Path to the file to send. Prefer an absolute path: a relative one resolves against ' +
             "this server's working directory, not yours."
+        ),
+      filePaths: z
+        .array(z.string())
+        .min(1)
+        .max(10)
+        .optional()
+        .describe(
+          'Paths to 1-10 files to send together under one link (instead of filePath). Their ' +
+            'combined size must be 3MB or less. Each file keeps its own name and type; ' +
+            'filename and mimeType cannot be used with this.'
         ),
       fileBase64: z
         .string()
@@ -295,6 +307,7 @@ server.registerTool(
   async (args) => {
     const {
       filePath,
+      filePaths,
       fileBase64,
       filename,
       mimeType,
@@ -305,17 +318,31 @@ server.registerTool(
       senderName,
     } = args;
 
-    // 1. Resolve bytes + filename + mimeType.
-    let bytes;
-    let resolvedFilename = filename;
-    let resolvedMimeType = mimeType;
+    // 1. Resolve each file's bytes, name and type. filePaths sends several files
+    // under ONE link; filePath and fileBase64 are the single-file forms, and keep
+    // their old precedence (filePath wins over fileBase64) when both are given.
+    if (filePaths !== undefined && (filePath !== undefined || fileBase64 !== undefined)) {
+      return textResult('Error: provide filePaths on its own, not with filePath or fileBase64.', true);
+    }
+    if (filePaths !== undefined && (filename || mimeType)) {
+      return textResult(
+        'Error: filename and mimeType apply to a single file, so they cannot be used with ' +
+          'filePaths: each file is sent under its own name. Rename the file first, or send it ' +
+          'on its own with filePath.',
+        true
+      );
+    }
 
+    const items = [];
     try {
-      if (filePath) {
-        const buf = await readFile(filePath);
-        bytes = new Uint8Array(buf);
-        if (!resolvedFilename) resolvedFilename = basename(filePath);
-        if (!resolvedMimeType) resolvedMimeType = inferMimeType(resolvedFilename);
+      if (filePaths !== undefined) {
+        for (const path of filePaths) {
+          const name = basename(path);
+          items.push({ bytes: new Uint8Array(await readFile(path)), filename: name, mimeType: inferMimeType(name) });
+        }
+      } else if (filePath) {
+        const name = filename || basename(filePath);
+        items.push({ bytes: new Uint8Array(await readFile(filePath)), filename: name, mimeType: mimeType || inferMimeType(name) });
       } else if (fileBase64) {
         if (!filename || !mimeType) {
           return textResult(
@@ -323,9 +350,9 @@ server.registerTool(
             true
           );
         }
-        bytes = new Uint8Array(Buffer.from(fileBase64, 'base64'));
+        items.push({ bytes: new Uint8Array(Buffer.from(fileBase64, 'base64')), filename, mimeType });
       } else {
-        return textResult('Error: provide either filePath or fileBase64.', true);
+        return textResult('Error: provide filePath, filePaths or fileBase64.', true);
       }
     } catch (err) {
       return textResult(
@@ -334,10 +361,13 @@ server.registerTool(
       );
     }
 
-    if (!bytes || bytes.length === 0) {
-      return textResult('Error: the file is empty or could not be read.', true);
+    const several = items.length > 1;
+    for (const item of items) {
+      if (!item.bytes || item.bytes.length === 0) {
+        return textResult(`Error: ${several ? item.filename : 'the file'} is empty or could not be read.`, true);
+      }
     }
-    // Pre-flight the size the API will enforce, so an oversized file fails here
+    // Pre-flight the size the API will enforce, so an oversized send fails here
     // instead of after encrypting and shipping a base64-inflated body — an 11MB
     // file previously produced a ~14.7MB POST before the server rejected it,
     // and the model was shown the platform's raw non-JSON 413 page.
@@ -345,21 +375,34 @@ server.registerTool(
     // own per-file cap, which was unreachable except for very large files and
     // misdirected the model when it did fire: told "10MB", it would shrink an
     // 11MB file to 5MB, retry, and hit this 3MB gate instead.
-    if (bytes.length > INLINE_SAFE_BYTES) {
+    // The limit is on the whole request body, so it applies to the files'
+    // TOTAL: several files share the 3MB.
+    const totalBytes = items.reduce((sum, item) => sum + item.bytes.length, 0);
+    if (totalBytes > INLINE_SAFE_BYTES) {
+      const mb = (n) => (n / 1024 / 1024).toFixed(1);
+      const limit = (INLINE_SAFE_BYTES / 1024 / 1024).toFixed(0);
       return textResult(
-        `Error: ${resolvedFilename ?? 'the file'} is ${(bytes.length / 1024 / 1024).toFixed(1)}MB, over this ` +
-          `tool's ${(INLINE_SAFE_BYTES / 1024 / 1024).toFixed(0)}MB limit. Bytes travel inline as base64, which ` +
-          `inflates them by about a third, so a larger file exceeds the API's request body limit. ` +
-          `FileSeal itself allows 10MB per file; that path is not available through this tool.`,
+        (several
+          ? `Error: these ${items.length} files total ${mb(totalBytes)}MB, over this tool's ${limit}MB ` +
+            `limit for one call. Send them in smaller groups, each of which gets its own link. `
+          : `Error: ${items[0].filename ?? 'the file'} is ${mb(totalBytes)}MB, over this tool's ${limit}MB limit. `) +
+          `Bytes travel inline as base64, which inflates them by about a third, so more exceeds ` +
+          `the API's request body limit. FileSeal itself allows 10MB per file; that path is not ` +
+          `available through this tool.`,
         true
       );
     }
-    if (!resolvedMimeType) {
-      return textResult(
-        `Error: could not infer mimeType from "${resolvedFilename}". FileSeal accepts PDF, DOC, ` +
-          'DOCX, TXT, JPG and PNG; if the file is one of these, pass mimeType explicitly.',
-        true
-      );
+    for (const item of items) {
+      if (!item.mimeType) {
+        return textResult(
+          `Error: could not infer mimeType from "${item.filename}". FileSeal accepts PDF, DOC, ` +
+            'DOCX, TXT, JPG and PNG; ' +
+            (several
+              ? 'with filePaths every type comes from the extension, so send this file on its own with filePath and mimeType.'
+              : 'if the file is one of these, pass mimeType explicitly.'),
+          true
+        );
+      }
     }
     if (deliveryMode === 'email' && !recipientEmail) {
       return textResult(
@@ -368,13 +411,25 @@ server.registerTool(
       );
     }
 
-    // 2. Generate key + encrypt to the attachment format.
+    // 2. Generate ONE key and encrypt every file with it. In link mode the share
+    // link carries a single #k= fragment, and the receive page decrypts every file
+    // of the send with that one key (receive-page.tsx). Each encryption draws its
+    // own random IV, so sharing the key does not repeat a nonce.
     let key;
-    let ciphertextBase64;
+    const files = [];
     try {
       key = await generateSealKey();
-      const ciphertext = await encryptToAttachmentFormat(bytes, key);
-      ciphertextBase64 = bytesToBase64(ciphertext);
+      for (const item of items) {
+        const ciphertext = await encryptToAttachmentFormat(item.bytes, key);
+        files.push({
+          filename: item.filename,
+          mimeType: item.mimeType,
+          fileSize: item.bytes.length,
+          ciphertextBase64: bytesToBase64(ciphertext),
+          // zk invariant: encryptionKey ONLY in email mode (its presence is a 400 in link mode).
+          ...(deliveryMode === 'email' ? { encryptionKey: key } : {}),
+        });
+      }
     } catch (err) {
       return textResult(
         `Error encrypting file: ${err instanceof Error ? err.message : String(err)}`,
@@ -383,19 +438,10 @@ server.registerTool(
     }
 
     // 3. Build the request body matching POST /v1/sends.
-    const file = {
-      filename: resolvedFilename,
-      mimeType: resolvedMimeType,
-      fileSize: bytes.length,
-      ciphertextBase64,
-      // zk invariant: encryptionKey ONLY in email mode (its presence is a 400 in link mode).
-      ...(deliveryMode === 'email' ? { encryptionKey: key } : {}),
-    };
-
     const body = {
       deliveryMode,
       expiryHours,
-      files: [file],
+      files,
       ...(message ? { message } : {}),
       ...(senderName ? { senderName } : {}),
       // Only in email mode. The server discards it in link mode anyway, but

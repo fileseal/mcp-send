@@ -14,8 +14,9 @@ changed `crypto.mjs` produces links that will not open.
 
 ## Tools
 
-- **`secure_send`**: encrypt a file and create a send.
-  - Inputs: `filePath` *or* (`fileBase64` + `filename` + `mimeType`),
+- **`secure_send`**: encrypt one or more files and create a send.
+  - Inputs: `filePath`, *or* `filePaths` (up to 10 files under one link),
+    *or* (`fileBase64` + `filename` + `mimeType`),
     `recipientEmail?`, `deliveryMode` (`'link'` default | `'email'`),
     `expiryHours?` (1-168, default 48), `message?`, `senderName?`.
   - **link** mode (default, zero-knowledge for the file): the AES key is never
@@ -27,10 +28,12 @@ changed `crypto.mjs` produces links that will not open.
   - **Not encrypted, in either mode:** the file name, `senderName` and
     `message`. FileSeal stores them as plain text and anyone with the link can
     read them, so keep secrets out of `message`.
-  - **Limits:** one file per call, up to 3 MB. The file travels inline as
-    base64 in the request body, which is what caps it; FileSeal's own 10 MB per
-    file is not reachable through this tool. Types: PDF, DOC, DOCX, TXT, JPG,
-    PNG.
+  - **Several files:** pass them together as `filePaths` to send them under
+    one link. Calling once per file makes a separate link for each.
+  - **Limits:** up to 10 files per call, 3 MB in total. The files travel inline
+    as base64 in the request body, which is what caps it; FileSeal's own 10 MB
+    per file is not reachable through this tool. Types: PDF, DOC, DOCX, TXT,
+    JPG, PNG.
 - **`send_status`**: `{ id }` → status, expiry, download count, audit events.
   Only sends created with the same API key are visible.
 - **`revoke_send`**: `{ id }` → the link stops working immediately, and

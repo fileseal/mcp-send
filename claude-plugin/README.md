@@ -27,8 +27,8 @@ it.
 
 ## Tools
 
-- **`secure_send`** encrypts one file and creates a send, in `link` mode (the
-  default) or `email` mode.
+- **`secure_send`** encrypts one or more files (up to 10, under one link) and
+  creates a send, in `link` mode (the default) or `email` mode.
 - **`send_status`** reports a send's status, expiry, download count and events.
 - **`revoke_send`** stops a send's link working and asks FileSeal to delete the
   encrypted files.
@@ -51,8 +51,8 @@ it.
 
 ## Limits
 
-One file per send, up to 3MB, as PDF, DOC, DOCX, TXT, JPG or PNG. The file
-travels inside the API request, which is what sets the 3MB ceiling. Expiry is 1
+Up to 10 files per send, 3MB in total, as PDF, DOC, DOCX, TXT, JPG or PNG. The
+files travel inside the API request, which is what sets the 3MB ceiling. Expiry is 1
 to 168 hours, 48 by default. For a larger PDF, DOC, DOCX, JPG or PNG, the
 FileSeal dashboard accepts files up to 10MB. It does not accept TXT.
 
